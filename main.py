@@ -477,8 +477,7 @@ def wikipedia_search(query):
 # =========================
 # GEMINI AI
 # =========================
-
- def generate_ai_answer(question, context, intent):
+def generate_ai_answer(question, context, intent):
 
     api_key = st.secrets.get(
         "GEMINI_API_KEY",
@@ -486,7 +485,6 @@ def wikipedia_search(query):
     )
 
     if not context.strip():
-
         return (
             "I could not find relevant information "
             "in the uploaded documents."
@@ -518,7 +516,6 @@ Rules:
 """
 
     if not api_key:
-
         return (
             "### Answer\n\n"
             + context[:3000]
@@ -542,13 +539,11 @@ Rules:
 
     except Exception:
 
-        # Gemini unavailable হলে
-        # uploaded document থেকেই answer দেখাবে
-
         return (
             "### 📚 Answer from Uploaded Document\n\n"
             + context[:3000]
         )
+ 
 # =========================
 # HEADER
 # =========================
