@@ -378,10 +378,7 @@ def add_document(
 # SEARCH DOCUMENTS
 # =========================
 
-def search_documents(
-    question,
-    top_k=5
-):
+def search_documents(question, top_k=5):
 
     if not st.session_state.chunks:
         return []
@@ -397,33 +394,21 @@ def search_documents(
         query_embedding
     )
 
-    indexes = np.argsort(
-        scores
-    )[::-1][:top_k]
+    indexes = np.argsort(scores)[::-1][:top_k]
 
     results = []
 
     for index in indexes:
 
-        score = float(
-            scores[index]
-        )
+        score = float(scores[index])
 
-        if score >= 0.30:
-
-            results.append({
-                "text":
-                    st.session_state.chunks[index],
-
-                "source":
-                    st.session_state.sources[index],
-
-                "score":
-                    score
-            })
+        results.append({
+            "text": st.session_state.chunks[index],
+            "source": st.session_state.sources[index],
+            "score": score
+        })
 
     return results
-
 
 # =========================
 # WIKIPEDIA SEARCH
@@ -493,78 +478,77 @@ def wikipedia_search(query):
 # GEMINI AI
 # =========================
 
-def generate_ai_answer(
-    question,
-    context,
-    intent
-):
+ def generate_ai_answer(question, context, intent):
 
     api_key = st.secrets.get(
         "GEMINI_API_KEY",
         ""
     )
 
-    if not api_key:
+    if not context.strip():
 
         return (
-            "⚠️ Gemini API key is not configured. "
-            "Please add GEMINI_API_KEY in "
-            "Streamlit Secrets."
+            "I could not find relevant information "
+            "in the uploaded documents."
         )
 
-    client = genai.Client(
-        api_key=api_key
-    )
-
     prompt = f"""
+You are IntelliMind AI.
 
-You are IntelliMind AI,
-an intelligent NLP-based knowledge assistant.
+Answer the user's question using the knowledge provided below.
 
-User Question:
+Question:
 {question}
 
 Detected Topic:
 {intent}
 
-Available Knowledge:
+Knowledge from uploaded documents:
 {context}
 
-Instructions:
+Rules:
 
-1. Answer the question clearly.
-2. Use the provided knowledge.
+1. Give the answer directly.
+2. Use the uploaded document information first.
 3. Do not invent information.
-4. Use simple English.
-5. Give examples when useful.
-6. Use bullet points when appropriate.
-7. If the knowledge is insufficient,
-   clearly say that.
-8. Keep the answer understandable
-   for a university student.
-
+4. If the uploaded document contains the answer,
+   explain it clearly.
+5. Use simple English.
+6. Use bullet points when useful.
 """
+
+    if not api_key:
+
+        return (
+            "### Answer\n\n"
+            + context[:3000]
+        )
 
     try:
 
-        response = client.models.generate_content(
-
-            model="gemini-3.8-flash",
-
-            contents=prompt
-
+        client = genai.Client(
+            api_key=api_key
         )
 
-        return response.text
+        response = client.models.generate_content(
+            model="gemini-3.8-flash",
+            contents=prompt
+        )
 
-    except Exception as e:
+        if response.text:
+            return response.text
+
+        return context[:3000]
+
+    except Exception:
+
+        # Gemini unavailable হলে
+        # uploaded document থেকেই answer দেখাবে
 
         return (
-            "AI generation error:\n\n"
-            + str(e)
+            "### 📚 Answer from Uploaded Document\n\n"
+            + context[:3000]
         )
-
-
 # =========================
 # HEADER
 # =========================
