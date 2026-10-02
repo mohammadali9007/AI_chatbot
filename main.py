@@ -1,5 +1,6 @@
 import os
 import re
+import time
 
 import streamlit as st
 from pypdf import PdfReader
@@ -16,8 +17,17 @@ from google import genai
 
 APP_NAME = "IntelliMind AI"
 
-# Current Gemini model
-MODEL_NAME = "gemini-3.8-flash"
+# ============================================================
+# GEMINI MODEL FALLBACK SYSTEM
+# ============================================================
+
+MODEL_NAMES = [
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+]
 
 # Text chunk settings
 CHUNK_SIZE = 900
@@ -130,14 +140,17 @@ def get_gemini_client():
     # --------------------------------------------------------
 
     try:
+
         return genai.Client(
             api_key=api_key
         )
 
     except Exception as e:
+
         st.error(
             f"Gemini client error: {e}"
         )
+
         return None
 
 
@@ -154,7 +167,10 @@ def clean_text(text):
         return ""
 
     # Remove null characters
-    text = text.replace("\x00", " ")
+    text = text.replace(
+        "\x00",
+        " "
+    )
 
     # Normalize spaces
     text = re.sub(
@@ -282,8 +298,11 @@ def read_pdf(file):
         ):
 
             try:
+
                 page_text = page.extract_text()
+
             except Exception:
+
                 page_text = ""
 
             if page_text:
@@ -385,10 +404,6 @@ def retrieve_knowledge(question):
 
     try:
 
-        # ----------------------------------------------------
-        # TF-IDF Vectorizer
-        # ----------------------------------------------------
-
         vectorizer = TfidfVectorizer(
             lowercase=True,
             ngram_range=(1, 2),
@@ -399,34 +414,16 @@ def retrieve_knowledge(question):
             texts + [question]
         )
 
-        # ----------------------------------------------------
-        # Question vector
-        # ----------------------------------------------------
-
         question_vector = matrix[-1]
 
-        # ----------------------------------------------------
-        # Document vectors
-        # ----------------------------------------------------
-
         document_vectors = matrix[:-1]
-
-        # ----------------------------------------------------
-        # Cosine similarity
-        # ----------------------------------------------------
 
         scores = cosine_similarity(
             question_vector,
             document_vectors
         )[0]
 
-        # ----------------------------------------------------
-        # Ranking
-        # ----------------------------------------------------
-
-        ranked_indices = scores.argsort()[
-            ::-1
-        ]
+        ranked_indices = scores.argsort()[::-1]
 
         results = []
 
@@ -440,10 +437,6 @@ def retrieve_knowledge(question):
                     "score": float(scores[index])
                 }
             )
-
-        # ----------------------------------------------------
-        # Best score
-        # ----------------------------------------------------
 
         best_score = (
             results[0]["score"]
@@ -494,7 +487,126 @@ RELEVANCE SCORE: {item['score']:.2f}
 
 
 # ============================================================
-# 13. ASK GEMINI
+# 13. GEMINI MODEL CALL WITH AUTOMATIC FALLBACK
+# ============================================================
+
+def call_gemini_with_fallback(prompt):
+
+    if client is None:
+
+        return (
+            None,
+            "Gemini API is not configured."
+        )
+
+    errors = []
+
+    # --------------------------------------------------------
+    # Try every model
+    # --------------------------------------------------------
+
+    for model_name in MODEL_NAMES:
+
+        try:
+
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt
+            )
+
+            # ------------------------------------------------
+            # Successful response
+            # ------------------------------------------------
+
+            if response is not None:
+
+                answer = getattr(
+                    response,
+                    "text",
+                    None
+                )
+
+                if answer:
+
+                    return (
+                        answer.strip(),
+                        model_name
+                    )
+
+            errors.append(
+                f"{model_name}: Empty response"
+            )
+
+        except Exception as e:
+
+            error = str(e)
+
+            errors.append(
+                f"{model_name}: {error}"
+            )
+
+            # ------------------------------------------------
+            # 503 = temporary server problem
+            # ------------------------------------------------
+
+            if (
+                "503" in error
+                or "UNAVAILABLE" in error
+            ):
+
+                continue
+
+            # ------------------------------------------------
+            # 429 = rate limit
+            # ------------------------------------------------
+
+            if "429" in error:
+
+                continue
+
+            # ------------------------------------------------
+            # 404 = model unavailable
+            # ------------------------------------------------
+
+            if "404" in error:
+
+                continue
+
+            # ------------------------------------------------
+            # 401 / 403 = API key problem
+            # ------------------------------------------------
+
+            if (
+                "401" in error
+                or "403" in error
+            ):
+
+                # Try next model anyway
+                continue
+
+            # ------------------------------------------------
+            # Other errors
+            # ------------------------------------------------
+
+            continue
+
+    # --------------------------------------------------------
+    # All models failed
+    # --------------------------------------------------------
+
+    error_message = (
+        "All Gemini models failed.\n\n"
+        + "\n\n".join(errors)
+    )
+
+    return (
+        None,
+        error_message
+    )
+
+
+# ============================================================
+# 14. ASK GEMINI
 # ============================================================
 
 def ask_gemini(
@@ -587,7 +699,7 @@ IMPORTANT RULES:
 Now answer the user's question.
 """
 
-        source = "📚 Knowledge Base + Gemini"
+        source_prefix = "📚 Knowledge Base + Gemini"
 
     # ========================================================
     # GENERAL GEMINI ANSWER
@@ -621,99 +733,39 @@ IMPORTANT RULES:
 Now answer the user's question.
 """
 
-        source = "🌐 Gemini General AI"
+        source_prefix = "🌐 Gemini General AI"
 
     # ========================================================
-    # CALL GEMINI
+    # CALL GEMINI WITH FALLBACK
     # ========================================================
 
-    try:
+    answer, model_used = call_gemini_with_fallback(
+        prompt
+    )
 
-        response = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=prompt
-        )
+    # --------------------------------------------------------
+    # Success
+    # --------------------------------------------------------
 
-        if response is not None:
-
-            answer = getattr(
-                response,
-                "text",
-                None
-            )
-
-            if answer:
-
-                return (
-                    answer.strip(),
-                    source
-                )
+    if answer:
 
         return (
-            None,
-            "Gemini returned an empty response."
+            answer,
+            f"{source_prefix} ({model_used})"
         )
 
-    except Exception as e:
+    # --------------------------------------------------------
+    # Failed
+    # --------------------------------------------------------
 
-        error = str(e)
-
-        # ----------------------------------------------------
-        # 404
-        # ----------------------------------------------------
-
-        if "404" in error:
-
-            return (
-                None,
-                f"Gemini model/API error: {error}"
-            )
-
-        # ----------------------------------------------------
-        # 429
-        # ----------------------------------------------------
-
-        if "429" in error:
-
-            return (
-                None,
-                "Gemini API quota or rate limit reached."
-            )
-
-        # ----------------------------------------------------
-        # 401 / 403
-        # ----------------------------------------------------
-
-        if "401" in error or "403" in error:
-
-            return (
-                None,
-                "Gemini API key authentication failed."
-            )
-
-        # ----------------------------------------------------
-        # 503
-        # ----------------------------------------------------
-
-        if "503" in error:
-
-            return (
-                None,
-                "Gemini server is temporarily unavailable."
-            )
-
-        # ----------------------------------------------------
-        # Other
-        # ----------------------------------------------------
-
-        return (
-            None,
-            f"Gemini error: {error}"
-        )
+    return (
+        None,
+        model_used
+    )
 
 
 # ============================================================
-# 14. MAIN ANSWER ENGINE
+# 15. MAIN ANSWER ENGINE
 # ============================================================
 
 def generate_answer(
@@ -766,11 +818,15 @@ def generate_answer(
 
     if context:
 
-        fallback = """
+        fallback = f"""
 ### ⚠️ Gemini could not generate the final answer
 
-However, relevant information was found
-in your uploaded knowledge base.
+Relevant information was found in your uploaded
+knowledge base.
+
+**Gemini error/details:**
+
+{source}
 
 Please review the retrieved sources below.
 """
@@ -786,9 +842,18 @@ Please review the retrieved sources below.
     # Final fallback
     # --------------------------------------------------------
 
+    fallback = f"""
+### ❌ Gemini could not generate an answer
+
+**Details:**
+
+{source}
+
+Please try again after a few moments.
+"""
+
     return (
-        "I could not generate an answer right now. "
-        "Please check your Gemini API configuration.",
+        fallback,
         "⚠️ System Fallback",
         best_score,
         results
@@ -796,7 +861,7 @@ Please review the retrieved sources below.
 
 
 # ============================================================
-# 15. TEST GEMINI
+# 16. TEST GEMINI WITH FALLBACK
 # ============================================================
 
 def test_gemini():
@@ -807,31 +872,30 @@ def test_gemini():
             "❌ Gemini client is not connected."
         )
 
-    try:
+    prompt = (
+        "Reply with exactly: "
+        "Gemini connection successful."
+    )
 
-        response = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=(
-                "Reply with exactly: "
-                "Gemini connection successful."
-            )
-        )
+    answer, model_used = call_gemini_with_fallback(
+        prompt
+    )
 
-        if response and response.text:
-
-            return response.text.strip()
+    if answer:
 
         return (
-            "❌ Gemini returned an empty response."
+            f"Gemini connection successful.\n"
+            f"Model used: {model_used}"
         )
 
-    except Exception as e:
-
-        return f"❌ Gemini error: {e}"
+    return (
+        f"❌ Gemini failed.\n\n"
+        f"{model_used}"
+    )
 
 
 # ============================================================
-# 16. DOCUMENT SUMMARY
+# 17. DOCUMENT SUMMARY
 # ============================================================
 
 def generate_summary():
@@ -843,10 +907,6 @@ def generate_summary():
     if client is None:
 
         return "Gemini API is not connected."
-
-    # --------------------------------------------------------
-    # Limit context
-    # --------------------------------------------------------
 
     context = "\n\n".join(
         item["text"]
@@ -881,26 +941,26 @@ Rules:
 - Keep the summary clear and concise.
 """
 
-    try:
+    answer, model_used = call_gemini_with_fallback(
+        prompt
+    )
 
-        response = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=prompt
+    if answer:
+
+        return (
+            f"{answer}\n\n"
+            f"---\n"
+            f"Model used: `{model_used}`"
         )
 
-        if response and response.text:
-
-            return response.text.strip()
-
-        return "Could not generate summary."
-
-    except Exception as e:
-
-        return f"Summary error: {e}"
+    return (
+        f"❌ Could not generate summary.\n\n"
+        f"{model_used}"
+    )
 
 
 # ============================================================
-# 17. SUGGEST QUESTIONS
+# 18. SUGGEST QUESTIONS
 # ============================================================
 
 def generate_questions():
@@ -934,42 +994,35 @@ Rules:
 - Number them from 1 to 5.
 """
 
-    try:
+    answer, model_used = call_gemini_with_fallback(
+        prompt
+    )
 
-        response = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=prompt
-        )
-
-        if not response or not response.text:
-
-            return []
-
-        lines = response.text.split("\n")
-
-        questions = []
-
-        for line in lines:
-
-            line = re.sub(
-                r"^\s*\d+[\.\)]\s*",
-                "",
-                line
-            ).strip()
-
-            if len(line) > 10:
-
-                questions.append(line)
-
-        return questions[:5]
-
-    except Exception:
+    if not answer:
 
         return []
 
+    lines = answer.split("\n")
+
+    questions = []
+
+    for line in lines:
+
+        line = re.sub(
+            r"^\s*\d+[\.\)]\s*",
+            "",
+            line
+        ).strip()
+
+        if len(line) > 10:
+
+            questions.append(line)
+
+    return questions[:5]
+
 
 # ============================================================
-# 18. SIDEBAR
+# 19. SIDEBAR
 # ============================================================
 
 with st.sidebar:
@@ -1023,13 +1076,8 @@ with st.sidebar:
                     )
 
                 progress.progress(
-                    (i + 1) /
-                    len(uploaded_files)
+                    (i + 1) / len(uploaded_files)
                 )
-
-            # ------------------------------------------------
-            # Save to session state
-            # ------------------------------------------------
 
             st.session_state.chunks = (
                 all_chunks
@@ -1092,9 +1140,14 @@ with st.sidebar:
     )
 
     st.write(
-        f"🤖 Model: "
-        f"**{MODEL_NAME}**"
+        "🤖 Models:"
     )
+
+    for model_name in MODEL_NAMES:
+
+        st.caption(
+            f"• {model_name}"
+        )
 
     if client:
 
@@ -1120,12 +1173,14 @@ with st.sidebar:
     ):
 
         with st.spinner(
-            "Testing Gemini..."
+            "Testing Gemini models..."
         ):
 
             test_result = test_gemini()
 
-        if test_result.startswith("Gemini connection successful"):
+        if test_result.startswith(
+            "Gemini connection successful"
+        ):
 
             st.success(
                 test_result
@@ -1154,7 +1209,7 @@ with st.sidebar:
 
 
 # ============================================================
-# 19. HEADER
+# 20. HEADER
 # ============================================================
 
 st.markdown(
@@ -1173,7 +1228,7 @@ st.markdown(
 
 
 # ============================================================
-# 20. TOP FEATURES
+# 21. TOP FEATURES
 # ============================================================
 
 col1, col2, col3, col4 = st.columns(4)
@@ -1214,7 +1269,7 @@ with col4:
 
 
 # ============================================================
-# 21. DOCUMENT SECTION
+# 22. DOCUMENT SECTION
 # ============================================================
 
 if st.session_state.documents:
@@ -1231,7 +1286,7 @@ if st.session_state.documents:
 
 
 # ============================================================
-# 22. AI RESEARCH TOOLS
+# 23. AI RESEARCH TOOLS
 # ============================================================
 
 if st.session_state.chunks:
@@ -1286,7 +1341,7 @@ if st.session_state.chunks:
 
 
 # ============================================================
-# 23. SUMMARY
+# 24. SUMMARY
 # ============================================================
 
 if st.session_state.document_summary:
@@ -1302,7 +1357,7 @@ if st.session_state.document_summary:
 
 
 # ============================================================
-# 24. SUGGESTED QUESTIONS
+# 25. SUGGESTED QUESTIONS
 # ============================================================
 
 if st.session_state.suggested_questions:
@@ -1321,7 +1376,7 @@ if st.session_state.suggested_questions:
 
 
 # ============================================================
-# 25. CHAT HISTORY
+# 26. CHAT HISTORY
 # ============================================================
 
 for message in st.session_state.chat_history:
@@ -1352,7 +1407,7 @@ for message in st.session_state.chat_history:
 
 
 # ============================================================
-# 26. CHAT INPUT
+# 27. CHAT INPUT
 # ============================================================
 
 question = st.chat_input(
@@ -1361,7 +1416,7 @@ question = st.chat_input(
 
 
 # ============================================================
-# 27. HANDLE QUESTION
+# 28. HANDLE QUESTION
 # ============================================================
 
 if question:
