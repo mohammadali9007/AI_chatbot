@@ -1,6 +1,7 @@
-import streamlit as st
-import re
 import os
+import re
+import streamlit as st
+
 from pypdf import PdfReader
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -8,9 +9,22 @@ from sklearn.metrics.pairwise import cosine_similarity
 from google import genai
 
 
-# =========================================================
-# PAGE CONFIG
-# =========================================================
+# ============================================================
+# CONFIG
+# ============================================================
+
+MODEL_NAME = "gemini-3.8-flash"
+
+CHUNK_SIZE = 900
+CHUNK_OVERLAP = 150
+
+MIN_SIMILARITY = 0.20
+TOP_K = 5
+
+
+# ============================================================
+# PAGE
+# ============================================================
 
 st.set_page_config(
     page_title="IntelliMind AI",
@@ -19,76 +33,82 @@ st.set_page_config(
 )
 
 
-# =========================================================
-# CUSTOM CSS
-# =========================================================
+# ============================================================
+# CSS
+# ============================================================
 
 st.markdown("""
 <style>
-.main {
-    padding-top: 1rem;
-}
 
-.title {
+.main-title {
     text-align: center;
     font-size: 42px;
-    font-weight: bold;
+    font-weight: 700;
 }
 
-.subtitle {
+.sub-title {
     text-align: center;
-    font-size: 18px;
-    color: gray;
+    color: #888;
+    margin-bottom: 30px;
 }
 
-.answer-box {
-    padding: 20px;
-    border-radius: 12px;
-    border: 1px solid #ddd;
-    margin-top: 15px;
-}
-
-.info-box {
-    padding: 15px;
+.source-box {
+    padding: 10px;
     border-radius: 10px;
-    background-color: rgba(100,100,100,0.08);
+    background: rgba(100,100,100,0.08);
+    margin-top: 10px;
 }
+
 </style>
 """, unsafe_allow_html=True)
 
 
-# =========================================================
+# ============================================================
 # TITLE
-# =========================================================
+# ============================================================
 
 st.markdown(
-    '<div class="title">🤖 IntelliMind AI</div>',
+    '<div class="main-title">🤖 IntelliMind AI</div>',
     unsafe_allow_html=True
 )
 
 st.markdown(
-    '<div class="subtitle">Knowledge Base + Google Gemini AI Assistant</div>',
+    '<div class="sub-title">'
+    'Smart Knowledge Assistant • RAG + Gemini'
+    '</div>',
     unsafe_allow_html=True
 )
 
-st.write("")
+
+# ============================================================
+# SESSION STATE
+# ============================================================
+
+if "chunks" not in st.session_state:
+    st.session_state.chunks = []
+
+if "documents" not in st.session_state:
+    st.session_state.documents = []
+
+if "chat" not in st.session_state:
+    st.session_state.chat = []
 
 
-# =========================================================
+# ============================================================
 # GEMINI CLIENT
-# =========================================================
+# ============================================================
 
 def get_gemini_client():
 
     api_key = None
 
-    # Streamlit Cloud Secrets
+    # Streamlit Cloud
     try:
         api_key = st.secrets["GEMINI_API_KEY"]
     except Exception:
         pass
 
-    # Local environment variable
+    # Local environment
     if not api_key:
         api_key = os.getenv("GEMINI_API_KEY")
 
@@ -104,23 +124,9 @@ def get_gemini_client():
 client = get_gemini_client()
 
 
-# =========================================================
-# SESSION STATE
-# =========================================================
-
-if "documents" not in st.session_state:
-    st.session_state.documents = []
-
-if "chunks" not in st.session_state:
-    st.session_state.chunks = []
-
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-
-
-# =========================================================
-# TEXT CLEANING
-# =========================================================
+# ============================================================
+# CLEAN TEXT
+# ============================================================
 
 def clean_text(text):
 
@@ -131,11 +137,11 @@ def clean_text(text):
     return text.strip()
 
 
-# =========================================================
-# SPLIT TEXT INTO CHUNKS
-# =========================================================
+# ============================================================
+# SMART CHUNKING
+# ============================================================
 
-def split_text(text, chunk_size=700, overlap=100):
+def create_chunks(text):
 
     text = clean_text(text)
 
@@ -148,102 +154,139 @@ def split_text(text, chunk_size=700, overlap=100):
 
     while start < len(text):
 
-        end = start + chunk_size
+        end = min(
+            start + CHUNK_SIZE,
+            len(text)
+        )
 
         chunk = text[start:end]
 
-        if chunk.strip():
+        # Try to finish at sentence boundary
+        if end < len(text):
+
+            last_period = max(
+                chunk.rfind("."),
+                chunk.rfind("?"),
+                chunk.rfind("!")
+            )
+
+            if last_period > CHUNK_SIZE * 0.60:
+
+                chunk = chunk[:last_period + 1]
+
+                end = start + len(chunk)
+
+        if len(chunk.strip()) > 50:
+
             chunks.append(chunk.strip())
 
-        start += chunk_size - overlap
+        next_start = end - CHUNK_OVERLAP
+
+        if next_start <= start:
+            next_start = end
+
+        start = next_start
 
     return chunks
 
 
-# =========================================================
-# READ TXT FILE
-# =========================================================
+# ============================================================
+# READ TXT
+# ============================================================
 
-def read_txt(uploaded_file):
+def read_txt(file):
 
     try:
 
-        text = uploaded_file.read().decode(
-            "utf-8",
-            errors="ignore"
+        return clean_text(
+            file.read().decode(
+                "utf-8",
+                errors="ignore"
+            )
         )
-
-        return clean_text(text)
 
     except Exception as e:
 
-        st.error(f"TXT reading error: {e}")
+        st.error(f"TXT error: {e}")
 
         return ""
 
 
-# =========================================================
-# READ PDF FILE
-# =========================================================
+# ============================================================
+# READ PDF
+# ============================================================
 
-def read_pdf(uploaded_file):
+def read_pdf(file):
 
     try:
 
-        reader = PdfReader(uploaded_file)
+        reader = PdfReader(file)
 
-        text = ""
+        pages = []
 
         for page in reader.pages:
 
-            page_text = page.extract_text()
+            text = page.extract_text()
 
-            if page_text:
-                text += page_text + "\n"
+            if text:
+                pages.append(text)
 
-        return clean_text(text)
+        return clean_text(
+            "\n".join(pages)
+        )
 
     except Exception as e:
 
-        st.error(f"PDF reading error: {e}")
+        st.error(f"PDF error: {e}")
 
         return ""
 
 
-# =========================================================
-# PROCESS UPLOADED FILE
-# =========================================================
+# ============================================================
+# PROCESS FILE
+# ============================================================
 
-def process_file(uploaded_file):
+def process_file(file):
 
-    file_name = uploaded_file.name.lower()
+    filename = file.name.lower()
 
-    if file_name.endswith(".txt"):
+    if filename.endswith(".txt"):
 
-        text = read_txt(uploaded_file)
+        text = read_txt(file)
 
-    elif file_name.endswith(".pdf"):
+    elif filename.endswith(".pdf"):
 
-        text = read_pdf(uploaded_file)
+        text = read_pdf(file)
 
     else:
 
         return []
 
     if not text:
-
         return []
 
-    chunks = split_text(text)
+    chunks = create_chunks(text)
 
-    return chunks
+    result = []
+
+    for i, chunk in enumerate(chunks):
+
+        result.append(
+            {
+                "text": chunk,
+                "source": file.name,
+                "chunk_id": i + 1
+            }
+        )
+
+    return result
 
 
-# =========================================================
-# DATASET SEARCH
-# =========================================================
+# ============================================================
+# RETRIEVAL
+# ============================================================
 
-def search_knowledge_base(question, top_k=4):
+def retrieve_context(question):
 
     chunks = st.session_state.chunks
 
@@ -251,360 +294,434 @@ def search_knowledge_base(question, top_k=4):
 
         return [], 0.0
 
+    texts = [
+        item["text"]
+        for item in chunks
+    ]
+
     try:
 
-        documents = chunks + [question]
-
         vectorizer = TfidfVectorizer(
-            stop_words="english"
+            lowercase=True,
+            stop_words="english",
+            ngram_range=(1, 2),
+            sublinear_tf=True
         )
 
-        matrix = vectorizer.fit_transform(documents)
+        matrix = vectorizer.fit_transform(
+            texts + [question]
+        )
 
         question_vector = matrix[-1]
 
         document_vectors = matrix[:-1]
 
-        similarities = cosine_similarity(
+        scores = cosine_similarity(
             question_vector,
             document_vectors
         )[0]
 
-        ranked_indices = similarities.argsort()[::-1]
+        ranked = scores.argsort()[::-1]
 
         results = []
 
-        for index in ranked_indices[:top_k]:
+        for index in ranked[:TOP_K]:
 
-            score = float(similarities[index])
+            score = float(scores[index])
 
             results.append(
                 {
-                    "text": chunks[index],
+                    "text": chunks[index]["text"],
+                    "source": chunks[index]["source"],
+                    "chunk_id": chunks[index]["chunk_id"],
                     "score": score
                 }
             )
 
-        if results:
-
-            best_score = results[0]["score"]
-
-        else:
-
-            best_score = 0.0
+        best_score = (
+            results[0]["score"]
+            if results
+            else 0.0
+        )
 
         return results, best_score
 
-    except Exception as e:
+    except Exception:
 
         return [], 0.0
 
 
-# =========================================================
-# GEMINI RESPONSE
-# =========================================================
+# ============================================================
+# BUILD CONTEXT
+# ============================================================
 
-def ask_gemini(question, context=""):
+def build_context(results):
+
+    useful = [
+        item
+        for item in results
+        if item["score"] >= MIN_SIMILARITY
+    ]
+
+    if not useful:
+        return ""
+
+    context_parts = []
+
+    for item in useful:
+
+        context_parts.append(
+            f"""
+SOURCE: {item['source']}
+CHUNK: {item['chunk_id']}
+RELEVANCE: {item['score']:.2f}
+
+{item['text']}
+"""
+        )
+
+    return "\n-----------------------\n".join(
+        context_parts
+    )
+
+
+# ============================================================
+# GEMINI
+# ============================================================
+
+def ask_gemini(question, context):
 
     if client is None:
 
-        return None
+        return (
+            None,
+            "Gemini API key is not configured."
+        )
 
     if context:
 
         prompt = f"""
-You are IntelliMind AI, a helpful AI assistant.
+You are IntelliMind AI, a professional knowledge assistant.
+
+The user uploaded documents to this application.
+
+Your job is to answer the user's question using the
+retrieved document context below.
+
+IMPORTANT RULES:
+
+1. Use the retrieved context as the primary source.
+2. Do not invent information from the documents.
+3. If the context clearly answers the question,
+   explain the answer naturally.
+4. If the context only partially answers the question,
+   explain what is supported and what is missing.
+5. Do not claim that something is from the document
+   if it is not actually present.
+6. Keep the answer clear and useful.
+7. Use bullet points when appropriate.
+
+RETRIEVED DOCUMENT CONTEXT:
+
+{context}
+
+USER QUESTION:
+
+{question}
+
+Now provide the best answer.
+"""
+
+        source = "📚 Knowledge Base + Gemini"
+
+    else:
+
+        prompt = f"""
+You are IntelliMind AI, a general AI assistant.
 
 The user asked:
 
 {question}
 
-Below is information retrieved from the user's uploaded
-knowledge base.
+No sufficiently relevant information was found
+in the uploaded documents.
 
-KNOWLEDGE BASE:
-{context}
+Answer using your general knowledge.
 
-Instructions:
+IMPORTANT:
 
-1. Use the knowledge base as the primary source.
-2. If the answer is clearly available in the knowledge base,
-   answer using that information.
-3. Do not invent facts that are not supported by the knowledge base.
-4. If the knowledge base does not contain enough information,
-   clearly say that the uploaded knowledge base does not provide
-   enough information.
-5. Keep the answer clear and easy to understand.
-6. If appropriate, use bullet points.
-
-Answer the user:
-"""
-
-    else:
-
-        prompt = f"""
-You are IntelliMind AI, a helpful general-purpose AI assistant.
-
-The user's question is:
-
-{question}
-
-There is no relevant information available in the user's
-uploaded knowledge base.
-
-Answer the question using your general knowledge.
-
-Instructions:
-
-1. Give a useful and accurate answer.
-2. Do not pretend that the information came from the uploaded files.
-3. If the question requires current or uncertain information,
-   clearly mention the limitation.
-4. Keep the answer simple and well structured.
+1. Do not pretend the answer came from the uploaded files.
+2. Clearly answer the user's question.
+3. Keep the answer easy to understand.
+4. If the information may be uncertain or time-sensitive,
+   mention that limitation.
 
 Answer:
 """
 
+        source = "🌐 Gemini General Knowledge"
+
     try:
 
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model=MODEL_NAME,
             contents=prompt
         )
 
         if response and response.text:
 
-            return response.text.strip()
+            return (
+                response.text.strip(),
+                source
+            )
 
-        return None
+        return (
+            None,
+            "Gemini returned an empty response."
+        )
 
     except Exception as e:
 
-        error_text = str(e)
+        error = str(e)
 
-        if "503" in error_text:
+        if "404" in error:
 
             return (
-                "⚠️ Gemini AI is temporarily unavailable because "
-                "the model is experiencing high demand. "
-                "Please try again in a few moments."
+                None,
+                "Model not available. Check Gemini model name."
             )
 
-        if "429" in error_text:
+        if "429" in error:
 
             return (
-                "⚠️ Gemini API request limit reached. "
-                "Please wait and try again."
+                None,
+                "API quota/rate limit reached. Try again later."
             )
 
-        if "401" in error_text or "403" in error_text:
+        if "401" in error or "403" in error:
 
             return (
-                "⚠️ Gemini API authentication failed. "
-                "Please check your API key."
+                None,
+                "API key authentication failed."
+            )
+
+        if "503" in error:
+
+            return (
+                None,
+                "Gemini is temporarily overloaded. Try again."
             )
 
         return (
-            "⚠️ Gemini could not generate the answer right now.\n\n"
-            f"Technical information: {error_text}"
+            None,
+            f"Gemini error: {error}"
         )
 
 
-# =========================================================
-# GENERATE FINAL ANSWER
-# =========================================================
+# ============================================================
+# FINAL ANSWER ENGINE
+# ============================================================
 
 def generate_answer(question):
 
-    results, best_score = search_knowledge_base(
-        question,
-        top_k=4
+    results, best_score = retrieve_context(
+        question
     )
 
-    # -----------------------------------------------------
-    # CASE 1: Relevant knowledge found
-    # -----------------------------------------------------
+    context = build_context(results)
 
-    if results and best_score >= 0.15:
-
-        selected_results = [
-            item
-            for item in results
-            if item["score"] >= 0.15
-        ]
-
-        context = "\n\n".join(
-            item["text"]
-            for item in selected_results
-        )
-
-        answer = ask_gemini(
-            question,
-            context
-        )
-
-        if answer:
-
-            return answer, "📚 Knowledge Base + Gemini", best_score
-
-        # Gemini unavailable → show dataset information
-
-        return (
-            context,
-            "📚 Knowledge Base",
-            best_score
-        )
-
-    # -----------------------------------------------------
-    # CASE 2: No relevant knowledge
-    # -----------------------------------------------------
-
-    answer = ask_gemini(
+    answer, source = ask_gemini(
         question,
-        ""
+        context
     )
 
+    # Gemini successful
     if answer:
 
-        return answer, "🌐 Gemini General AI", best_score
+        return (
+            answer,
+            source,
+            best_score,
+            results
+        )
 
-    # -----------------------------------------------------
-    # CASE 3: Gemini unavailable
-    # -----------------------------------------------------
+    # Gemini unavailable but KB exists
+    if context:
+
+        fallback = (
+            "Gemini could not generate the final response "
+            "right now.\n\n"
+            "However, relevant information was found "
+            "in your uploaded knowledge base:\n\n"
+            + context
+        )
+
+        return (
+            fallback,
+            "📚 Knowledge Base Fallback",
+            best_score,
+            results
+        )
 
     return (
-        "I couldn't find relevant information in the uploaded "
-        "knowledge base, and the AI service is currently unavailable.",
-        "⚠️ Fallback",
-        best_score
+        "I could not generate an answer right now. "
+        "Please check your Gemini API key and try again.",
+        "⚠️ System Fallback",
+        best_score,
+        results
     )
 
 
-# =========================================================
+# ============================================================
 # SIDEBAR
-# =========================================================
+# ============================================================
 
 with st.sidebar:
 
     st.header("📂 Knowledge Base")
 
-    uploaded_files = st.file_uploader(
-        "Upload TXT or PDF files",
-        type=["txt", "pdf"],
+    files = st.file_uploader(
+        "Upload PDF or TXT",
+        type=["pdf", "txt"],
         accept_multiple_files=True
     )
 
-    if uploaded_files:
+    if st.button(
+        "🚀 Build Knowledge Base",
+        use_container_width=True
+    ):
 
-        if st.button("🔄 Process Files", use_container_width=True):
+        if not files:
+
+            st.warning(
+                "Please upload at least one file."
+            )
+
+        else:
 
             all_chunks = []
             file_names = []
 
-            for file in uploaded_files:
+            progress = st.progress(0)
+
+            for i, file in enumerate(files):
 
                 chunks = process_file(file)
 
-                if chunks:
+                all_chunks.extend(chunks)
 
-                    all_chunks.extend(chunks)
+                file_names.append(file.name)
 
-                    file_names.append(file.name)
+                progress.progress(
+                    (i + 1) / len(files)
+                )
 
             st.session_state.chunks = all_chunks
+
             st.session_state.documents = file_names
 
             st.success(
-                f"{len(file_names)} file(s) processed successfully!"
+                f"{len(file_names)} file(s) processed!"
             )
 
     st.divider()
 
-    st.subheader("📊 Knowledge Base Status")
+    st.subheader("📊 Status")
 
     st.write(
-        f"Files: **{len(st.session_state.documents)}**"
+        f"📄 Files: **{len(st.session_state.documents)}**"
     )
 
     st.write(
-        f"Text chunks: **{len(st.session_state.chunks)}**"
+        f"🧩 Chunks: **{len(st.session_state.chunks)}**"
     )
 
     if client:
 
-        st.success("🟢 Gemini API Connected")
+        st.success(
+            "🟢 Gemini Connected"
+        )
 
     else:
 
-        st.warning("🔴 Gemini API Not Connected")
+        st.error(
+            "🔴 Gemini Not Connected"
+        )
 
     st.divider()
 
-    if st.button("🗑️ Clear Chat", use_container_width=True):
+    if st.button(
+        "🗑️ Clear Conversation",
+        use_container_width=True
+    ):
 
-        st.session_state.chat_history = []
+        st.session_state.chat = []
 
         st.rerun()
 
 
-# =========================================================
-# SHOW UPLOADED FILES
-# =========================================================
+# ============================================================
+# DOCUMENTS
+# ============================================================
 
 if st.session_state.documents:
 
-    st.markdown("### 📚 Uploaded Knowledge")
+    st.markdown("### 📚 Your Documents")
 
-    cols = st.columns(
-        min(len(st.session_state.documents), 4)
-    )
+    for name in st.session_state.documents:
 
-    for i, name in enumerate(
-        st.session_state.documents
+        st.caption(
+            f"📄 {name}"
+        )
+
+
+# ============================================================
+# CHAT HISTORY
+# ============================================================
+
+for message in st.session_state.chat:
+
+    with st.chat_message(
+        message["role"]
     ):
 
-        with cols[i % len(cols)]:
-
-            st.info(f"📄 {name}")
-
-
-# =========================================================
-# CHAT HISTORY
-# =========================================================
-
-for message in st.session_state.chat_history:
-
-    with st.chat_message(message["role"]):
-
-        st.markdown(message["content"])
+        st.markdown(
+            message["content"]
+        )
 
         if message["role"] == "assistant":
 
-            if "source" in message:
+            if message.get("source"):
 
                 st.caption(
                     f"Source: {message['source']}"
                 )
 
+            if message.get("score") is not None:
 
-# =========================================================
+                st.caption(
+                    f"Best similarity: "
+                    f"{message['score']:.2f}"
+                )
+
+
+# ============================================================
 # CHAT INPUT
-# =========================================================
+# ============================================================
 
 question = st.chat_input(
-    "Ask me anything..."
+    "Ask anything about your documents..."
 )
 
 
-# =========================================================
-# HANDLE QUESTION
-# =========================================================
+# ============================================================
+# PROCESS QUESTION
+# ============================================================
 
 if question:
 
-    # User message
-
-    st.session_state.chat_history.append(
+    # USER
+    st.session_state.chat.append(
         {
             "role": "user",
             "content": question
@@ -615,26 +732,52 @@ if question:
 
         st.markdown(question)
 
-    # Assistant
-
+    # AI
     with st.chat_message("assistant"):
 
-        with st.spinner("Thinking..."):
+        with st.spinner(
+            "🔎 Searching knowledge base..."
+        ):
 
-            answer, source, score = generate_answer(
+            answer, source, score, results = generate_answer(
                 question
             )
 
         st.markdown(answer)
 
         st.caption(
-            f"Source: {source} | Similarity: {score:.2f}"
+            f"Source: {source}"
         )
 
-    st.session_state.chat_history.append(
+        st.caption(
+            f"Best similarity: {score:.2f}"
+        )
+
+        # Show retrieved sources
+        relevant = [
+            r for r in results
+            if r["score"] >= MIN_SIMILARITY
+        ]
+
+        if relevant:
+
+            with st.expander(
+                "🔍 View retrieved sources"
+            ):
+
+                for item in relevant:
+
+                    st.write(
+                        f"📄 {item['source']} "
+                        f"| Chunk {item['chunk_id']} "
+                        f"| Score {item['score']:.2f}"
+                    )
+
+    st.session_state.chat.append(
         {
             "role": "assistant",
             "content": answer,
-            "source": source
+            "source": source,
+            "score": score
         }
     )
