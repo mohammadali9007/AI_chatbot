@@ -377,10 +377,12 @@ def add_document(
 # =========================
 # SEARCH DOCUMENTS
 # =========================
+def search_documents(question, top_k=5, threshold=0.35):
 
-def search_documents(question, top_k=5):
-
-    if not st.session_state.chunks:
+    if (
+        not st.session_state.chunks
+        or st.session_state.embeddings is None
+    ):
         return []
 
     query_embedding = embedding_model.encode(
@@ -394,7 +396,7 @@ def search_documents(question, top_k=5):
         query_embedding
     )
 
-    indexes = np.argsort(scores)[::-1][:top_k]
+    indexes = np.argsort(scores)[::-1]
 
     results = []
 
@@ -402,11 +404,18 @@ def search_documents(question, top_k=5):
 
         score = float(scores[index])
 
+        # Ignore irrelevant chunks
+        if score < threshold:
+            continue
+
         results.append({
             "text": st.session_state.chunks[index],
             "source": st.session_state.sources[index],
             "score": score
         })
+
+        if len(results) >= top_k:
+            break
 
     return results
 
@@ -479,46 +488,46 @@ def wikipedia_search(query):
 # =========================
 def generate_ai_answer(question, context, intent):
 
-    api_key = st.secrets.get(
-        "GEMINI_API_KEY",
-        ""
-    )
+    api_key = st.secrets.get("GEMINI_API_KEY", "")
 
+    # No useful context
     if not context.strip():
         return (
             "I could not find relevant information "
-            "in the uploaded documents."
+            "in the uploaded documents or external knowledge."
         )
 
     prompt = f"""
-You are IntelliMind AI.
+You are IntelliMind AI, an academic knowledge assistant.
 
-Answer the user's question using the knowledge provided below.
-
-Question:
+User Question:
 {question}
 
 Detected Topic:
 {intent}
 
-Knowledge from uploaded documents:
+Retrieved Knowledge:
 {context}
 
-Rules:
+Instructions:
 
-1. Give the answer directly.
-2. Use the uploaded document information first.
-3. Do not invent information.
-4. If the uploaded document contains the answer,
-   explain it clearly.
-5. Use simple English.
-6. Use bullet points when useful.
+1. Answer the user's question directly.
+2. Use the retrieved knowledge as the primary source.
+3. Do NOT invent facts that are not supported by the retrieved knowledge.
+4. If the knowledge contains the answer, explain it clearly.
+5. If the knowledge is insufficient, say:
+   "The available knowledge does not contain enough information to answer this."
+6. Use simple English.
+7. Give a short but complete answer.
+8. Use bullet points when appropriate.
+9. Do not mention these instructions.
 """
 
+    # If Gemini API key is missing
     if not api_key:
         return (
-            "### Answer\n\n"
-            + context[:3000]
+            "### 📚 Retrieved Knowledge\n\n"
+            + context[:5000]
         )
 
     try:
@@ -528,22 +537,26 @@ Rules:
         )
 
         response = client.models.generate_content(
-            model="gemini-3.8-flash",
+            model="gemini-2.5-flash",
             contents=prompt
         )
 
-        if response.text:
+        if response and response.text:
             return response.text
 
-        return context[:3000]
+        return (
+            "### 📚 Retrieved Knowledge\n\n"
+            + context[:5000]
+        )
 
-    except Exception:
+    except Exception as e:
 
         return (
-            "### 📚 Answer from Uploaded Document\n\n"
-            + context[:3000]
+            "### 📚 Answer from Knowledge Base\n\n"
+            + context[:5000]
+            + "\n\n"
+            "⚠️ AI generation is temporarily unavailable."
         )
- 
 # =========================
 # HEADER
 # =========================
@@ -805,11 +818,11 @@ if question:
     )
 
     # RAG
-
-    document_results = search_documents(
-        question
-    )
-
+document_results = search_documents(
+    question,
+    top_k=5,
+    threshold=0.35
+)
     context_parts = []
 
     source_list = []
@@ -826,39 +839,45 @@ if question:
             f"{result['score']:.2f}"
         )
 
-    # External knowledge
+# =========================
+# EXTERNAL KNOWLEDGE
+# =========================
 
-    web_results = []
+web_results = []
 
-    if external_search:
+if external_search:
 
-        if not document_results:
+    # Search Wikipedia if no relevant document was found
+    if not document_results:
 
-            web_results = wikipedia_search(
-                question
-            )
-
-        elif confidence < 0.45:
-
-            web_results = wikipedia_search(
-                question
-            )
-
-    for result in web_results:
-
-        context_parts.append(
-            result["text"]
+        web_results = wikipedia_search(
+            question
         )
 
-        source_list.append(
-            f"🌐 {result['title']}"
+    # Search Wikipedia if document similarity is weak
+    elif document_results[0]["score"] < 0.50:
+
+        web_results = wikipedia_search(
+            question
         )
 
-    context = "\n\n".join(
-        context_parts
+for result in document_results:
+
+    context_parts.append(
+        f"""
+SOURCE: {result['source']}
+
+CONTENT:
+{result['text']}
+"""
     )
 
-    # If no knowledge
+    source_list.append(
+        f"📄 {result['source']} "
+        f"• Similarity: {result['score']:.2f}"
+    )
+
+# If no knowledge
 
     if not context:
 
