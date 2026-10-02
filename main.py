@@ -1,6 +1,5 @@
 import os
 import re
-import io
 
 import streamlit as st
 from pypdf import PdfReader
@@ -17,13 +16,16 @@ from google import genai
 
 APP_NAME = "IntelliMind AI"
 
+# Current Gemini model
 MODEL_NAME = "gemini-3.8-flash"
 
+# Text chunk settings
 CHUNK_SIZE = 900
 CHUNK_OVERLAP = 150
 
+# Retrieval settings
 TOP_K = 5
-MIN_SIMILARITY = 0.18
+MIN_SIMILARITY = 0.25
 
 
 # ============================================================
@@ -31,7 +33,7 @@ MIN_SIMILARITY = 0.18
 # ============================================================
 
 st.set_page_config(
-    page_title="IntelliMind AI",
+    page_title=APP_NAME,
     page_icon="🧠",
     layout="wide"
 )
@@ -57,13 +59,6 @@ st.markdown(
         color: #777;
         font-size: 18px;
         margin-bottom: 30px;
-    }
-
-    .feature-card {
-        padding: 18px;
-        border-radius: 15px;
-        border: 1px solid rgba(120,120,120,0.2);
-        margin-bottom: 10px;
     }
 
     .source-card {
@@ -107,25 +102,42 @@ def get_gemini_client():
 
     api_key = None
 
+    # --------------------------------------------------------
     # Streamlit Cloud Secrets
+    # --------------------------------------------------------
+
     try:
-        api_key = st.secrets["GEMINI_API_KEY"]
+        api_key = st.secrets.get("GEMINI_API_KEY")
     except Exception:
         pass
 
+    # --------------------------------------------------------
     # Local environment variable
+    # --------------------------------------------------------
+
     if not api_key:
         api_key = os.getenv("GEMINI_API_KEY")
 
+    # --------------------------------------------------------
+    # No API key
+    # --------------------------------------------------------
+
     if not api_key:
         return None
+
+    # --------------------------------------------------------
+    # Create Gemini client
+    # --------------------------------------------------------
 
     try:
         return genai.Client(
             api_key=api_key
         )
 
-    except Exception:
+    except Exception as e:
+        st.error(
+            f"Gemini client error: {e}"
+        )
         return None
 
 
@@ -141,8 +153,10 @@ def clean_text(text):
     if not text:
         return ""
 
+    # Remove null characters
     text = text.replace("\x00", " ")
 
+    # Normalize spaces
     text = re.sub(
         r"\s+",
         " ",
@@ -153,7 +167,7 @@ def clean_text(text):
 
 
 # ============================================================
-# 7. SMART TEXT CHUNKING
+# 7. TEXT CHUNKING
 # ============================================================
 
 def create_chunks(text):
@@ -176,14 +190,16 @@ def create_chunks(text):
 
         chunk = text[start:end]
 
-        # Try to end at a sentence
+        # ----------------------------------------------------
+        # Try to end at sentence
+        # ----------------------------------------------------
+
         if end < len(text):
 
             possible_breaks = [
                 chunk.rfind("."),
                 chunk.rfind("?"),
                 chunk.rfind("!"),
-                chunk.rfind("\n")
             ]
 
             best_break = max(
@@ -198,11 +214,19 @@ def create_chunks(text):
 
                 end = start + len(chunk)
 
+        # ----------------------------------------------------
+        # Save valid chunk
+        # ----------------------------------------------------
+
         if len(chunk.strip()) > 40:
 
             chunks.append(
                 chunk.strip()
             )
+
+        # ----------------------------------------------------
+        # Move forward
+        # ----------------------------------------------------
 
         next_start = end - CHUNK_OVERLAP
 
@@ -257,12 +281,15 @@ def read_pdf(file):
             start=1
         ):
 
-            page_text = page.extract_text()
+            try:
+                page_text = page.extract_text()
+            except Exception:
+                page_text = ""
 
             if page_text:
 
                 pages.append(
-                    f"[Page {page_number}]\n"
+                    f"[Page {page_number}] "
                     f"{page_text}"
                 )
 
@@ -287,9 +314,17 @@ def process_file(file):
 
     filename = file.name.lower()
 
+    # --------------------------------------------------------
+    # TXT
+    # --------------------------------------------------------
+
     if filename.endswith(".txt"):
 
         text = read_txt(file)
+
+    # --------------------------------------------------------
+    # PDF
+    # --------------------------------------------------------
 
     elif filename.endswith(".pdf"):
 
@@ -299,9 +334,17 @@ def process_file(file):
 
         return []
 
+    # --------------------------------------------------------
+    # Empty file
+    # --------------------------------------------------------
+
     if not text:
 
         return []
+
+    # --------------------------------------------------------
+    # Create chunks
+    # --------------------------------------------------------
 
     chunks = create_chunks(text)
 
@@ -342,9 +385,12 @@ def retrieve_knowledge(question):
 
     try:
 
+        # ----------------------------------------------------
+        # TF-IDF Vectorizer
+        # ----------------------------------------------------
+
         vectorizer = TfidfVectorizer(
             lowercase=True,
-            stop_words="english",
             ngram_range=(1, 2),
             sublinear_tf=True
         )
@@ -353,14 +399,30 @@ def retrieve_knowledge(question):
             texts + [question]
         )
 
+        # ----------------------------------------------------
+        # Question vector
+        # ----------------------------------------------------
+
         question_vector = matrix[-1]
 
+        # ----------------------------------------------------
+        # Document vectors
+        # ----------------------------------------------------
+
         document_vectors = matrix[:-1]
+
+        # ----------------------------------------------------
+        # Cosine similarity
+        # ----------------------------------------------------
 
         scores = cosine_similarity(
             question_vector,
             document_vectors
         )[0]
+
+        # ----------------------------------------------------
+        # Ranking
+        # ----------------------------------------------------
 
         ranked_indices = scores.argsort()[
             ::-1
@@ -378,6 +440,10 @@ def retrieve_knowledge(question):
                     "score": float(scores[index])
                 }
             )
+
+        # ----------------------------------------------------
+        # Best score
+        # ----------------------------------------------------
 
         best_score = (
             results[0]["score"]
@@ -408,11 +474,11 @@ def build_context(results):
 
         return ""
 
-    context = []
+    context_parts = []
 
     for item in useful_results:
 
-        context.append(
+        context_parts.append(
             f"""
 SOURCE: {item['source']}
 CHUNK: {item['chunk_id']}
@@ -423,7 +489,7 @@ RELEVANCE SCORE: {item['score']:.2f}
         )
 
     return "\n------------------------\n".join(
-        context
+        context_parts
     )
 
 
@@ -437,6 +503,10 @@ def ask_gemini(
     mode="Normal"
 ):
 
+    # --------------------------------------------------------
+    # Check client
+    # --------------------------------------------------------
+
     if client is None:
 
         return (
@@ -444,52 +514,84 @@ def ask_gemini(
             "Gemini API is not configured."
         )
 
+    # --------------------------------------------------------
+    # Mode instructions
+    # --------------------------------------------------------
+
+    if "Student" in mode:
+
+        mode_instruction = """
+Explain the answer using very simple English.
+
+Use:
+- simple explanation
+- simple examples
+- important exam points when useful
+"""
+
+    elif "Research" in mode:
+
+        mode_instruction = """
+Give a research-oriented answer.
+
+Focus on:
+- Objective
+- Methodology
+- Findings
+- Limitations
+- Research implications
+"""
+
+    else:
+
+        mode_instruction = """
+Give a clear and well-structured answer.
+
+Use headings and bullet points when useful.
+"""
+
+    # ========================================================
+    # KNOWLEDGE BASE ANSWER
+    # ========================================================
+
     if context:
 
         prompt = f"""
-You are IntelliMind AI, an AI-powered
-Research and Knowledge Assistant.
+You are IntelliMind AI,
+an AI-powered Knowledge and Research Assistant.
 
 USER QUESTION:
 {question}
 
-USER UPLOADED KNOWLEDGE:
+RETRIEVED INFORMATION FROM USER DOCUMENTS:
 {context}
 
-MODE:
+RESPONSE MODE:
 {mode}
 
 IMPORTANT RULES:
 
 1. The uploaded knowledge is the primary source.
-2. Answer using the retrieved information whenever possible.
-3. Do not invent information from the documents.
-4. If the documents only partially answer the question,
-   clearly explain what is known and what is missing.
-5. Do not claim information came from the document
-   unless it is actually supported by the context.
-6. Give a clear and well-structured answer.
-7. Use headings or bullet points when useful.
+2. Use the retrieved information whenever possible.
+3. Do not invent facts that are not supported by the document.
+4. If the document only partially answers the question,
+   clearly explain what is available and what is missing.
+5. Do not claim something came from the document
+   unless it is actually supported by the retrieved text.
+6. Do not simply copy the entire document.
+7. Answer the user's actual question directly.
+8. Keep the answer clear and easy to understand.
 
-If MODE is Student:
-
-Explain the concept in simple English.
-Give a simple example.
-Mention important exam points when appropriate.
-
-If MODE is Research:
-
-Focus on:
-- objective
-- methodology
-- findings
-- limitations
-- research implications
+{mode_instruction}
 
 Now answer the user's question.
 """
 
         source = "📚 Knowledge Base + Gemini"
+
+    # ========================================================
+    # GENERAL GEMINI ANSWER
+    # ========================================================
 
     else:
 
@@ -500,26 +602,30 @@ a general-purpose AI assistant.
 USER QUESTION:
 {question}
 
-No sufficiently relevant information
-was found in the uploaded knowledge base.
-
-MODE:
-{mode}
+There is no sufficiently relevant information
+in the uploaded knowledge base.
 
 Answer using your general knowledge.
 
-IMPORTANT:
+IMPORTANT RULES:
 
 1. Do not pretend the answer came from uploaded documents.
 2. Give a useful and clear answer.
-3. If information is uncertain or time-sensitive,
+3. Do not invent document information.
+4. If information may be uncertain or time-sensitive,
    mention the limitation.
-4. Use simple language when appropriate.
+5. Keep the answer easy to understand.
 
-Answer:
+{mode_instruction}
+
+Now answer the user's question.
 """
 
         source = "🌐 Gemini General AI"
+
+    # ========================================================
+    # CALL GEMINI
+    # ========================================================
 
     try:
 
@@ -528,12 +634,20 @@ Answer:
             contents=prompt
         )
 
-        if response and response.text:
+        if response is not None:
 
-            return (
-                response.text.strip(),
-                source
+            answer = getattr(
+                response,
+                "text",
+                None
             )
+
+            if answer:
+
+                return (
+                    answer.strip(),
+                    source
+                )
 
         return (
             None,
@@ -544,33 +658,53 @@ Answer:
 
         error = str(e)
 
+        # ----------------------------------------------------
+        # 404
+        # ----------------------------------------------------
+
         if "404" in error:
 
             return (
                 None,
-                "Model not available. Check MODEL_NAME."
+                f"Gemini model/API error: {error}"
             )
+
+        # ----------------------------------------------------
+        # 429
+        # ----------------------------------------------------
 
         if "429" in error:
 
             return (
                 None,
-                "API quota/rate limit reached."
+                "Gemini API quota or rate limit reached."
             )
+
+        # ----------------------------------------------------
+        # 401 / 403
+        # ----------------------------------------------------
 
         if "401" in error or "403" in error:
 
             return (
                 None,
-                "API key authentication failed."
+                "Gemini API key authentication failed."
             )
+
+        # ----------------------------------------------------
+        # 503
+        # ----------------------------------------------------
 
         if "503" in error:
 
             return (
                 None,
-                "Gemini is temporarily unavailable."
+                "Gemini server is temporarily unavailable."
             )
+
+        # ----------------------------------------------------
+        # Other
+        # ----------------------------------------------------
 
         return (
             None,
@@ -587,19 +721,35 @@ def generate_answer(
     mode
 ):
 
+    # --------------------------------------------------------
+    # Retrieve
+    # --------------------------------------------------------
+
     results, best_score = retrieve_knowledge(
         question
     )
 
+    # --------------------------------------------------------
+    # Build context
+    # --------------------------------------------------------
+
     context = build_context(
         results
     )
+
+    # --------------------------------------------------------
+    # Ask Gemini
+    # --------------------------------------------------------
 
     answer, source = ask_gemini(
         question,
         context,
         mode
     )
+
+    # --------------------------------------------------------
+    # Gemini success
+    # --------------------------------------------------------
 
     if answer:
 
@@ -610,17 +760,20 @@ def generate_answer(
             results
         )
 
+    # --------------------------------------------------------
     # Knowledge base fallback
+    # --------------------------------------------------------
+
     if context:
 
         fallback = """
-⚠️ Gemini could not generate the final
-response right now.
+### ⚠️ Gemini could not generate the final answer
 
-However, I found relevant information
-in your uploaded knowledge base:
+However, relevant information was found
+in your uploaded knowledge base.
 
-""" + context
+Please review the retrieved sources below.
+"""
 
         return (
             fallback,
@@ -628,6 +781,10 @@ in your uploaded knowledge base:
             best_score,
             results
         )
+
+    # --------------------------------------------------------
+    # Final fallback
+    # --------------------------------------------------------
 
     return (
         "I could not generate an answer right now. "
@@ -639,7 +796,42 @@ in your uploaded knowledge base:
 
 
 # ============================================================
-# 15. DOCUMENT SUMMARY
+# 15. TEST GEMINI
+# ============================================================
+
+def test_gemini():
+
+    if client is None:
+
+        return (
+            "❌ Gemini client is not connected."
+        )
+
+    try:
+
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=(
+                "Reply with exactly: "
+                "Gemini connection successful."
+            )
+        )
+
+        if response and response.text:
+
+            return response.text.strip()
+
+        return (
+            "❌ Gemini returned an empty response."
+        )
+
+    except Exception as e:
+
+        return f"❌ Gemini error: {e}"
+
+
+# ============================================================
+# 16. DOCUMENT SUMMARY
 # ============================================================
 
 def generate_summary():
@@ -652,6 +844,10 @@ def generate_summary():
 
         return "Gemini API is not connected."
 
+    # --------------------------------------------------------
+    # Limit context
+    # --------------------------------------------------------
+
     context = "\n\n".join(
         item["text"]
         for item in st.session_state.chunks[:20]
@@ -662,13 +858,13 @@ You are an AI research assistant.
 
 Analyze the following uploaded document content.
 
-DOCUMENT:
+DOCUMENT CONTENT:
 
 {context}
 
 Create a structured summary with:
 
-1. Title/Topic
+1. Title / Topic
 2. Main Objective
 3. Key Concepts
 4. Methodology or Approach
@@ -677,8 +873,12 @@ Create a structured summary with:
 7. Possible Future Work
 8. Short Conclusion
 
-Do not invent information.
-If something is unavailable, say "Not mentioned".
+Rules:
+
+- Do not invent information.
+- If something is unavailable,
+  write "Not mentioned".
+- Keep the summary clear and concise.
 """
 
     try:
@@ -700,7 +900,7 @@ If something is unavailable, say "Not mentioned".
 
 
 # ============================================================
-# 16. SUGGEST QUESTIONS
+# 17. SUGGEST QUESTIONS
 # ============================================================
 
 def generate_questions():
@@ -719,15 +919,19 @@ def generate_questions():
     )
 
     prompt = f"""
-Based on this document:
+Based on the following uploaded document:
 
 {context}
 
-Generate 5 useful questions a student
-or researcher could ask about this document.
+Generate 5 useful questions that a
+student or researcher could ask.
 
-Return only the questions.
-Number them 1 to 5.
+Rules:
+
+- Questions must be related to the document.
+- Keep them meaningful.
+- Return only 5 questions.
+- Number them from 1 to 5.
 """
 
     try:
@@ -755,9 +959,7 @@ Number them 1 to 5.
 
             if len(line) > 10:
 
-                questions.append(
-                    line
-                )
+                questions.append(line)
 
         return questions[:5]
 
@@ -767,7 +969,7 @@ Number them 1 to 5.
 
 
 # ============================================================
-# 17. SIDEBAR
+# 18. SIDEBAR
 # ============================================================
 
 with st.sidebar:
@@ -781,6 +983,10 @@ with st.sidebar:
         type=["pdf", "txt"],
         accept_multiple_files=True
     )
+
+    # --------------------------------------------------------
+    # Build Knowledge Base
+    # --------------------------------------------------------
 
     if st.button(
         "🚀 Build Knowledge Base",
@@ -821,6 +1027,10 @@ with st.sidebar:
                     len(uploaded_files)
                 )
 
+            # ------------------------------------------------
+            # Save to session state
+            # ------------------------------------------------
+
             st.session_state.chunks = (
                 all_chunks
             )
@@ -833,11 +1043,24 @@ with st.sidebar:
 
             st.session_state.suggested_questions = []
 
-            st.success(
-                "Knowledge Base created!"
-            )
+            if all_chunks:
+
+                st.success(
+                    f"Knowledge Base created! "
+                    f"{len(all_chunks)} chunks."
+                )
+
+            else:
+
+                st.error(
+                    "No readable text was found."
+                )
 
     st.divider()
+
+    # ========================================================
+    # AI MODE
+    # ========================================================
 
     st.subheader("🎯 AI Mode")
 
@@ -852,6 +1075,10 @@ with st.sidebar:
 
     st.divider()
 
+    # ========================================================
+    # SYSTEM STATUS
+    # ========================================================
+
     st.subheader("📊 System Status")
 
     st.write(
@@ -862,6 +1089,11 @@ with st.sidebar:
     st.write(
         f"🧩 Text Chunks: "
         f"**{len(st.session_state.chunks)}**"
+    )
+
+    st.write(
+        f"🤖 Model: "
+        f"**{MODEL_NAME}**"
     )
 
     if client:
@@ -876,6 +1108,39 @@ with st.sidebar:
             "🔴 Gemini Not Connected"
         )
 
+    # ========================================================
+    # TEST GEMINI
+    # ========================================================
+
+    st.divider()
+
+    if st.button(
+        "🧪 Test Gemini",
+        use_container_width=True
+    ):
+
+        with st.spinner(
+            "Testing Gemini..."
+        ):
+
+            test_result = test_gemini()
+
+        if test_result.startswith("Gemini connection successful"):
+
+            st.success(
+                test_result
+            )
+
+        else:
+
+            st.error(
+                test_result
+            )
+
+    # ========================================================
+    # CLEAR CHAT
+    # ========================================================
+
     st.divider()
 
     if st.button(
@@ -889,7 +1154,7 @@ with st.sidebar:
 
 
 # ============================================================
-# 18. HEADER
+# 19. HEADER
 # ============================================================
 
 st.markdown(
@@ -908,7 +1173,7 @@ st.markdown(
 
 
 # ============================================================
-# 19. TOP FEATURES
+# 20. TOP FEATURES
 # ============================================================
 
 col1, col2, col3, col4 = st.columns(4)
@@ -949,7 +1214,7 @@ with col4:
 
 
 # ============================================================
-# 20. DOCUMENT SECTION
+# 21. DOCUMENT SECTION
 # ============================================================
 
 if st.session_state.documents:
@@ -966,7 +1231,7 @@ if st.session_state.documents:
 
 
 # ============================================================
-# 21. AI TOOLS
+# 22. AI RESEARCH TOOLS
 # ============================================================
 
 if st.session_state.chunks:
@@ -976,6 +1241,10 @@ if st.session_state.chunks:
     )
 
     col1, col2 = st.columns(2)
+
+    # --------------------------------------------------------
+    # Summary
+    # --------------------------------------------------------
 
     with col1:
 
@@ -993,6 +1262,10 @@ if st.session_state.chunks:
             st.session_state.document_summary = (
                 summary
             )
+
+    # --------------------------------------------------------
+    # Questions
+    # --------------------------------------------------------
 
     with col2:
 
@@ -1013,7 +1286,7 @@ if st.session_state.chunks:
 
 
 # ============================================================
-# 22. SUMMARY
+# 23. SUMMARY
 # ============================================================
 
 if st.session_state.document_summary:
@@ -1029,7 +1302,7 @@ if st.session_state.document_summary:
 
 
 # ============================================================
-# 23. SUGGESTED QUESTIONS
+# 24. SUGGESTED QUESTIONS
 # ============================================================
 
 if st.session_state.suggested_questions:
@@ -1048,7 +1321,7 @@ if st.session_state.suggested_questions:
 
 
 # ============================================================
-# 24. CHAT HISTORY
+# 25. CHAT HISTORY
 # ============================================================
 
 for message in st.session_state.chat_history:
@@ -1079,7 +1352,7 @@ for message in st.session_state.chat_history:
 
 
 # ============================================================
-# 25. CHAT INPUT
+# 26. CHAT INPUT
 # ============================================================
 
 question = st.chat_input(
@@ -1088,12 +1361,15 @@ question = st.chat_input(
 
 
 # ============================================================
-# 26. HANDLE QUESTION
+# 27. HANDLE QUESTION
 # ============================================================
 
 if question:
 
-    # USER
+    # ========================================================
+    # USER MESSAGE
+    # ========================================================
+
     st.session_state.chat_history.append(
         {
             "role": "user",
@@ -1107,34 +1383,55 @@ if question:
             question
         )
 
-    # AI
+    # ========================================================
+    # AI MESSAGE
+    # ========================================================
+
     with st.chat_message("assistant"):
 
         with st.spinner(
-            "🧠 Thinking and searching..."
+            "🧠 Searching knowledge base and thinking..."
         ):
 
-            answer, source, score, results = (
-                generate_answer(
-                    question,
-                    mode
-                )
+            (
+                answer,
+                source,
+                score,
+                results
+            ) = generate_answer(
+                question,
+                mode
             )
+
+        # ----------------------------------------------------
+        # Answer
+        # ----------------------------------------------------
 
         st.markdown(
             answer
         )
 
+        # ----------------------------------------------------
+        # Source
+        # ----------------------------------------------------
+
         st.caption(
             f"Source: {source}"
         )
+
+        # ----------------------------------------------------
+        # Retrieval score
+        # ----------------------------------------------------
 
         st.caption(
             f"Best retrieval score: "
             f"{score:.2f}"
         )
 
-        # Sources
+        # ====================================================
+        # RETRIEVED SOURCES
+        # ====================================================
+
         relevant = [
             item
             for item in results
@@ -1151,17 +1448,22 @@ if question:
 
                     st.markdown(
                         f"""
-**📄 {item['source']}**
+### 📄 {item['source']}
 
-Chunk: `{item['chunk_id']}`
+**Chunk:** `{item['chunk_id']}`
 
-Relevance: `{item['score']:.2f}`
+**Relevance:** `{item['score']:.2f}`
 
 {item['text']}
+
+---
 """
                     )
 
-    # SAVE
+    # ========================================================
+    # SAVE CHAT
+    # ========================================================
+
     st.session_state.chat_history.append(
         {
             "role": "assistant",
