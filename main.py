@@ -1,27 +1,65 @@
-import streamlit as st
-import numpy as np
-import re
+# ============================================================
+# INTELLIMIND AI
+# Professional AI Knowledge Assistant
+# ============================================================
 
-from sentence_transformers import SentenceTransformer
+import streamlit as st
+import os
+import base64
+import re
+import numpy as np
+
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+
+from sentence_transformers import SentenceTransformer
+
 from google import genai
 
 
 # ============================================================
-# PAGE CONFIGURATION
+# PAGE CONFIG
 # ============================================================
 
 st.set_page_config(
     page_title="IntelliMind AI",
-    page_icon="AI",
+    page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 
 # ============================================================
-# PROFESSIONAL UI CSS
+# SESSION STATE
+# ============================================================
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+if "dataset_loaded" not in st.session_state:
+    st.session_state.dataset_loaded = False
+
+if "questions" not in st.session_state:
+    st.session_state.questions = []
+
+if "answers" not in st.session_state:
+    st.session_state.answers = []
+
+if "semantic_embeddings" not in st.session_state:
+    st.session_state.semantic_embeddings = None
+
+if "tfidf_matrix" not in st.session_state:
+    st.session_state.tfidf_matrix = None
+
+if "vectorizer" not in st.session_state:
+    st.session_state.vectorizer = None
+
+if "dataset_name" not in st.session_state:
+    st.session_state.dataset_name = "No dataset"
+
+
+# ============================================================
+# CUSTOM CSS
 # ============================================================
 
 st.markdown(
@@ -33,20 +71,19 @@ st.markdown(
        ====================================================== */
 
     .stApp {
-        background: #f5f8fc;
+        background:
+            radial-gradient(
+                circle at 85% 5%,
+                rgba(37, 99, 235, 0.08),
+                transparent 30%
+            ),
+            #f5f8fd;
     }
 
     .block-container {
         max-width: 1280px;
-        padding-top: 24px;
+        padding-top: 25px;
         padding-bottom: 80px;
-        padding-left: 32px;
-        padding-right: 32px;
-    }
-
-    /* Remove top decoration */
-    header[data-testid="stHeader"] {
-        background: transparent;
     }
 
 
@@ -55,84 +92,258 @@ st.markdown(
        ====================================================== */
 
     section[data-testid="stSidebar"] {
-        background: #071a36;
-        border-right: 1px solid #18385f;
-    }
+        background:
+            linear-gradient(
+                180deg,
+                #061733 0%,
+                #082c5d 55%,
+                #061a38 100%
+            );
 
-    section[data-testid="stSidebar"] > div {
-        padding-top: 22px;
+        border-right: 1px solid #173d69;
     }
 
     section[data-testid="stSidebar"] * {
-        color: #d9e8fb;
+        color: #dbeafe;
     }
 
-    section[data-testid="stSidebar"] h1 {
-        color: #ffffff !important;
-        font-size: 22px !important;
-        margin-bottom: 2px;
-    }
-
+    section[data-testid="stSidebar"] h1,
     section[data-testid="stSidebar"] h2,
     section[data-testid="stSidebar"] h3 {
         color: #ffffff !important;
     }
 
     section[data-testid="stSidebar"] hr {
-        border-color: #1d3d65;
+        border-color: rgba(255,255,255,0.12);
     }
 
-    section[data-testid="stSidebar"] .stCaption {
-        color: #87a9d1;
+
+    /* Sidebar selectbox */
+
+    section[data-testid="stSidebar"]
+    div[data-baseweb="select"] > div {
+        background: rgba(255,255,255,0.06) !important;
+        border: 1px solid rgba(147,197,253,0.20) !important;
+        border-radius: 10px !important;
+    }
+
+
+    /* Sidebar uploader */
+
+    section[data-testid="stSidebar"]
+    [data-testid="stFileUploader"] {
+        background: rgba(255,255,255,0.04) !important;
+        border: 1px solid rgba(147,197,253,0.16) !important;
+        border-radius: 12px !important;
+    }
+
+    section[data-testid="stSidebar"]
+    [data-testid="stFileUploader"] section {
+        background: rgba(255,255,255,0.03) !important;
+        border: 1px dashed rgba(147,197,253,0.30) !important;
+    }
+
+
+    /* Sidebar metric */
+
+    section[data-testid="stSidebar"]
+    [data-testid="stMetric"] {
+        background: rgba(255,255,255,0.05) !important;
+        border: 1px solid rgba(147,197,253,0.15) !important;
+        border-radius: 12px !important;
+    }
+
+    section[data-testid="stSidebar"]
+    [data-testid="stMetricLabel"] {
+        color: #9fc3ea !important;
+    }
+
+    section[data-testid="stSidebar"]
+    [data-testid="stMetricValue"] {
+        color: #ffffff !important;
+    }
+
+
+    /* Sidebar buttons */
+
+    section[data-testid="stSidebar"]
+    .stButton > button {
+        background: rgba(255,255,255,0.06) !important;
+        color: #dbeafe !important;
+        border: 1px solid rgba(147,197,253,0.18) !important;
+        border-radius: 10px !important;
+    }
+
+    section[data-testid="stSidebar"]
+    .stButton > button:hover {
+        background: rgba(59,130,246,0.20) !important;
+        border-color: #60a5fa !important;
     }
 
 
     /* ======================================================
-       HEADINGS
+       HERO
        ====================================================== */
 
-    h1 {
-        color: #102f5f !important;
-        font-size: 34px !important;
-        font-weight: 750 !important;
-        letter-spacing: -0.7px;
+    .hero {
+        position: relative;
+        overflow: hidden;
+
+        min-height: 345px;
+
+        border-radius: 25px;
+
+        background:
+            linear-gradient(
+                105deg,
+                #061936 0%,
+                #0a3268 48%,
+                #145db7 100%
+            );
+
+        border: 1px solid rgba(96,165,250,0.20);
+
+        box-shadow:
+            0 20px 60px rgba(8,47,95,0.18);
+
+        margin-bottom: 25px;
     }
 
-    h2 {
-        color: #173f78 !important;
-        font-weight: 700 !important;
+
+    /* Brain image */
+
+    .hero::before {
+        content: "";
+
+        position: absolute;
+
+        width: 500px;
+        height: 500px;
+
+        right: -70px;
+        top: -85px;
+
+        background-image:
+            url("data:image/png;base64,__BRAIN_IMAGE__");
+
+        background-size: contain;
+        background-repeat: no-repeat;
+        background-position: center;
+
+        opacity: 0.46;
+
+        filter:
+            blur(1.5px)
+            drop-shadow(
+                0 0 30px rgba(96,165,250,0.75)
+            );
+
+        transform: rotate(3deg);
     }
 
-    h3 {
-        color: #214a83 !important;
-        font-weight: 650 !important;
+
+    /* Hero overlay */
+
+    .hero::after {
+        content: "";
+
+        position: absolute;
+        inset: 0;
+
+        background:
+            linear-gradient(
+                90deg,
+                rgba(6,25,54,0.99) 0%,
+                rgba(6,25,54,0.91) 38%,
+                rgba(6,25,54,0.35) 75%,
+                rgba(6,25,54,0.10) 100%
+            );
+
+        pointer-events: none;
     }
 
-    p {
-        color: #52657d;
+
+    .hero-content {
+        position: relative;
+        z-index: 5;
+
+        padding: 55px 50px;
+
+        max-width: 690px;
+    }
+
+
+    .hero-title {
+        color: #ffffff;
+
+        font-size: 42px;
+
+        font-weight: 800;
+
+        letter-spacing: -1.2px;
+
+        margin-bottom: 12px;
+    }
+
+
+    .hero-subtitle {
+        color: #c9ddf5;
+
+        font-size: 15px;
+
+        line-height: 1.75;
+
+        max-width: 590px;
+    }
+
+
+    .hero-badge {
+        display: inline-block;
+
+        margin-top: 24px;
+
+        padding: 8px 16px;
+
+        border-radius: 30px;
+
+        background: rgba(59,130,246,0.16);
+
+        border: 1px solid rgba(147,197,253,0.30);
+
+        color: #bfdbfe;
+
+        font-size: 11px;
+
+        font-weight: 700;
+
+        letter-spacing: 0.8px;
     }
 
 
     /* ======================================================
-       METRICS
+       CARDS
        ====================================================== */
 
     [data-testid="stMetric"] {
         background: #ffffff;
-        border: 1px solid #dce6f2;
-        border-radius: 14px;
-        padding: 18px;
-        box-shadow: 0 3px 14px rgba(21, 70, 120, 0.05);
+
+        border: 1px solid #dce6f1;
+
+        border-radius: 15px;
+
+        padding: 15px;
+
+        box-shadow:
+            0 6px 22px rgba(15,60,110,0.05);
     }
 
     [data-testid="stMetricLabel"] {
-        color: #718198 !important;
-        font-size: 12px !important;
+        color: #718096 !important;
     }
 
     [data-testid="stMetricValue"] {
-        color: #174a88 !important;
-        font-weight: 700 !important;
+        color: #1559a5 !important;
+        font-weight: 750 !important;
     }
 
 
@@ -142,37 +353,20 @@ st.markdown(
 
     [data-testid="stFileUploader"] {
         background: #ffffff;
-        border: 1px solid #d7e3f0;
+
+        border: 1px solid #d6e3f0;
+
         border-radius: 14px;
+
         padding: 8px;
     }
 
     [data-testid="stFileUploader"] section {
-        border: 1px dashed #9db8d7 !important;
-        background: #f8fbff !important;
+        border: 1px dashed #9bb9d8 !important;
+
+        background: #f7fbff !important;
+
         border-radius: 10px !important;
-    }
-
-
-    /* ======================================================
-       BUTTONS
-       ====================================================== */
-
-    .stButton > button {
-        width: 100%;
-        border-radius: 9px;
-        border: 1px solid #c9d9ec;
-        background: #ffffff;
-        color: #164f8f;
-        font-weight: 600;
-        min-height: 40px;
-        transition: 0.2s;
-    }
-
-    .stButton > button:hover {
-        background: #edf5ff;
-        border-color: #3984d7;
-        color: #0e4f94;
     }
 
 
@@ -181,14 +375,21 @@ st.markdown(
        ====================================================== */
 
     [data-testid="stChatMessage"] {
-        background: transparent;
+        background: transparent !important;
+
+        border: none !important;
+
         padding-top: 8px;
+
         padding-bottom: 8px;
     }
 
+
     [data-testid="stChatMessageContent"] {
-        border-radius: 14px;
-        line-height: 1.7;
+        border-radius: 15px;
+
+        line-height: 1.75;
+
         font-size: 14px;
     }
 
@@ -198,24 +399,49 @@ st.markdown(
        ====================================================== */
 
     [data-testid="stChatInput"] {
-        border: 1px solid #b9cee6 !important;
-        border-radius: 16px !important;
         background: #ffffff !important;
-        box-shadow: 0 6px 25px rgba(31, 85, 140, 0.10);
-    }
 
-    [data-testid="stChatInput"] textarea {
-        font-size: 14px !important;
+        border: 1px solid #b9d2ed !important;
+
+        border-radius: 17px !important;
+
+        box-shadow:
+            0 8px 30px rgba(30,90,150,0.10);
     }
 
 
     /* ======================================================
-       EXPANDERS
+       BUTTON
+       ====================================================== */
+
+    .stButton > button {
+        border-radius: 9px !important;
+
+        border: 1px solid #c9daeb !important;
+
+        background: #ffffff !important;
+
+        color: #15549a !important;
+
+        font-weight: 600 !important;
+    }
+
+    .stButton > button:hover {
+        background: #edf5ff !important;
+
+        border-color: #3982d4 !important;
+    }
+
+
+    /* ======================================================
+       EXPANDER
        ====================================================== */
 
     [data-testid="stExpander"] {
-        border: 1px solid #d9e4f0 !important;
         background: #ffffff !important;
+
+        border: 1px solid #d8e4f0 !important;
+
         border-radius: 12px !important;
     }
 
@@ -225,16 +451,7 @@ st.markdown(
        ====================================================== */
 
     [data-testid="stAlert"] {
-        border-radius: 11px;
-    }
-
-
-    /* ======================================================
-       TABS
-       ====================================================== */
-
-    button[data-baseweb="tab"] {
-        font-weight: 600;
+        border-radius: 12px !important;
     }
 
 
@@ -245,150 +462,189 @@ st.markdown(
     @media (max-width: 768px) {
 
         .block-container {
-            padding-left: 15px;
-            padding-right: 15px;
-            padding-top: 15px;
+            padding-left: 13px;
+            padding-right: 13px;
         }
 
-        h1 {
-            font-size: 27px !important;
+        .hero {
+            min-height: 340px;
         }
 
-        h2 {
-            font-size: 22px !important;
+        .hero-content {
+            padding: 35px 25px;
         }
 
-        [data-testid="stMetric"] {
-            margin-bottom: 8px;
+        .hero-title {
+            font-size: 30px;
+        }
+
+        .hero-subtitle {
+            font-size: 13px;
+        }
+
+        .hero::before {
+            width: 350px;
+            height: 350px;
+
+            right: -100px;
+            top: 25px;
+
+            opacity: 0.27;
         }
     }
 
     </style>
-    """,
+    """.replace(
+        "__BRAIN_IMAGE__",
+        ""
+    ),
     unsafe_allow_html=True
 )
 
 
 # ============================================================
-# SESSION STATE
+# BRAIN IMAGE
 # ============================================================
 
-defaults = {
-    "messages": [],
-    "questions": [],
-    "answers": [],
-    "embeddings": None,
-    "tfidf_vectorizer": None,
-    "tfidf_matrix": None,
-    "dataset_key": None,
-    "active_page": "AI Assistant"
-}
+def load_brain_image():
 
-for key, value in defaults.items():
+    path = "brain.png"
 
-    if key not in st.session_state:
-        st.session_state[key] = value
+    if not os.path.exists(path):
+        return ""
+
+    try:
+
+        with open(path, "rb") as f:
+
+            return base64.b64encode(
+                f.read()
+            ).decode()
+
+    except Exception:
+
+        return ""
 
 
-# ============================================================
-# SHORT FORM KNOWLEDGE
-# ============================================================
-
-SHORT_FORMS = {
-
-    "ai": "artificial intelligence",
-
-    "ml": "machine learning",
-
-    "dl": "deep learning",
-
-    "nlp": "natural language processing",
-
-    "cv": "computer vision",
-
-    "llm": "large language model",
-
-    "rag": "retrieval augmented generation",
-
-    "cnn": "convolutional neural network",
-
-    "rnn": "recurrent neural network",
-
-    "lstm": "long short term memory",
-
-    "gru": "gated recurrent unit",
-
-    "bert":
-        "bidirectional encoder representations from transformers",
-
-    "api":
-        "application programming interface",
-
-    "svm":
-        "support vector machine",
-
-    "knn":
-        "k nearest neighbors",
-
-    "rf":
-        "random forest",
-
-    "dt":
-        "decision tree",
-
-    "ann":
-        "artificial neural network",
-
-    "gan":
-        "generative adversarial network",
-
-    "ocr":
-        "optical character recognition",
-
-    "tts":
-        "text to speech",
-
-    "stt":
-        "speech to text",
-
-    "eda":
-        "exploratory data analysis"
-}
+brain_base64 = load_brain_image()
 
 
 # ============================================================
-# TEXT PROCESSING
+# RELOAD CSS WITH BRAIN
 # ============================================================
 
-def expand_short_forms(text):
+if brain_base64:
+
+    st.markdown(
+        f"""
+        <style>
+
+        .hero::before {{
+
+            background-image:
+                url("data:image/png;base64,{brain_base64}");
+
+            background-size: contain;
+            background-repeat: no-repeat;
+            background-position: center;
+
+            opacity: 0.46;
+
+            filter:
+                blur(1.5px)
+                drop-shadow(
+                    0 0 30px
+                    rgba(96,165,250,0.75)
+                );
+        }}
+
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+# ============================================================
+# TEXT CLEANER
+# ============================================================
+
+def clean_text(text):
+
+    text = str(text)
 
     text = text.lower()
 
     text = re.sub(
-        r"[^a-zA-Z0-9\s]",
+        r"[^a-z0-9\s]",
         " ",
         text
     )
 
-    words = text.split()
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
+    )
+
+    return text.strip()
+
+
+# ============================================================
+# SHORT FORM DICTIONARY
+# ============================================================
+
+SHORT_FORMS = {
+
+    "ml": "machine learning",
+    "dl": "deep learning",
+    "ai": "artificial intelligence",
+    "nlp": "natural language processing",
+    "cv": "computer vision",
+    "cnn": "convolutional neural network",
+    "rnn": "recurrent neural network",
+    "lstm": "long short term memory",
+    "llm": "large language model",
+    "rag": "retrieval augmented generation",
+    "tfidf": "term frequency inverse document frequency",
+    "api": "application programming interface",
+    "eda": "exploratory data analysis",
+    "knn": "k nearest neighbors",
+    "svm": "support vector machine",
+    "pca": "principal component analysis",
+    "gan": "generative adversarial network",
+    "bert": "bidirectional encoder representations from transformers",
+    "gpu": "graphics processing unit",
+    "cpu": "central processing unit"
+}
+
+
+def expand_short_forms(text):
+
+    words = text.lower().split()
 
     expanded = []
 
     for word in words:
 
-        expanded.append(word)
+        cleaned = re.sub(
+            r"[^a-z0-9]",
+            "",
+            word
+        )
 
-        if word in SHORT_FORMS:
+        if cleaned in SHORT_FORMS:
 
             expanded.append(
-                SHORT_FORMS[word]
+                SHORT_FORMS[cleaned]
             )
+
+        expanded.append(word)
 
     return " ".join(expanded)
 
 
 # ============================================================
-# EMBEDDING MODEL
+# LOAD SEMANTIC MODEL
 # ============================================================
 
 @st.cache_resource
@@ -399,26 +655,32 @@ def load_embedding_model():
     )
 
 
-model = load_embedding_model()
-
-
 # ============================================================
-# DATASET PARSER
+# PARSE DATASET
 # ============================================================
 
-def parse_dataset(uploaded_file):
-
-    raw = uploaded_file.read()
-
-    text = raw.decode(
-        "utf-8",
-        errors="ignore"
-    )
+def parse_dataset(file):
 
     questions = []
     answers = []
 
-    for line in text.splitlines():
+    try:
+
+        content = file.getvalue().decode(
+            "utf-8",
+            errors="ignore"
+        )
+
+    except Exception:
+
+        content = str(
+            file.getvalue(),
+            errors="ignore"
+        )
+
+    lines = content.splitlines()
+
+    for line in lines:
 
         line = line.strip()
 
@@ -445,40 +707,15 @@ def parse_dataset(uploaded_file):
 
 
 # ============================================================
-# EMBEDDINGS
+# BUILD SEARCH INDEX
 # ============================================================
 
 @st.cache_data(show_spinner=False)
-def create_embeddings(question_tuple):
+def prepare_tfidf(questions):
 
-    processed_questions = [
-
-        expand_short_forms(question)
-
-        for question in question_tuple
-    ]
-
-    embeddings = model.encode(
-        processed_questions,
-        normalize_embeddings=True,
-        show_progress_bar=False
-    )
-
-    return np.asarray(embeddings)
-
-
-# ============================================================
-# TF-IDF
-# ============================================================
-
-@st.cache_data(show_spinner=False)
-def create_tfidf(question_tuple):
-
-    processed_questions = [
-
-        expand_short_forms(question)
-
-        for question in question_tuple
+    cleaned_questions = [
+        clean_text(q)
+        for q in questions
     ]
 
     vectorizer = TfidfVectorizer(
@@ -487,83 +724,116 @@ def create_tfidf(question_tuple):
     )
 
     matrix = vectorizer.fit_transform(
-        processed_questions
+        cleaned_questions
     )
 
     return vectorizer, matrix
 
 
+@st.cache_resource(show_spinner=False)
+def create_embeddings(questions):
+
+    model = load_embedding_model()
+
+    expanded_questions = [
+        expand_short_forms(q)
+        for q in questions
+    ]
+
+    embeddings = model.encode(
+        expanded_questions,
+        normalize_embeddings=True,
+        show_progress_bar=False
+    )
+
+    return embeddings
+
+
 # ============================================================
-# DATASET SEARCH
+# SEARCH BEST ANSWER
 # ============================================================
 
-def search_dataset(
-    question,
-    top_k=5
-):
+def find_best_answer(question):
 
     if not st.session_state.questions:
 
-        return []
+        return None, None, 0.0
 
-    processed_query = expand_short_forms(
+
+    questions = st.session_state.questions
+
+
+    # --------------------------------------------------------
+    # Query expansion
+    # --------------------------------------------------------
+
+    expanded_query = expand_short_forms(
         question
     )
 
-    # Semantic search
+
+    # --------------------------------------------------------
+    # Semantic similarity
+    # --------------------------------------------------------
+
+    model = load_embedding_model()
+
     query_embedding = model.encode(
-        [processed_query],
-        normalize_embeddings=True
+        [expanded_query],
+        normalize_embeddings=True,
+        show_progress_bar=False
     )
 
     semantic_scores = cosine_similarity(
         query_embedding,
-        st.session_state.embeddings
+        st.session_state.semantic_embeddings
     )[0]
 
-    # Lexical search
-    query_tfidf = (
-        st.session_state.tfidf_vectorizer
-        .transform([processed_query])
+
+    # --------------------------------------------------------
+    # TF-IDF similarity
+    # --------------------------------------------------------
+
+    cleaned_query = clean_text(
+        expanded_query
     )
 
-    lexical_scores = cosine_similarity(
-        query_tfidf,
+    query_vector = (
+        st.session_state.vectorizer
+        .transform([cleaned_query])
+    )
+
+    tfidf_scores = cosine_similarity(
+        query_vector,
         st.session_state.tfidf_matrix
     )[0]
 
-    # Hybrid scoring
+
+    # --------------------------------------------------------
+    # Hybrid score
+    # --------------------------------------------------------
+
     final_scores = (
-
-        semantic_scores * 0.75
-
+        0.75 * semantic_scores
         +
-
-        lexical_scores * 0.25
+        0.25 * tfidf_scores
     )
 
-    indices = np.argsort(
-        final_scores
-    )[::-1][:top_k]
 
-    results = []
+    best_index = int(
+        np.argmax(final_scores)
+    )
 
-    for index in indices:
+    best_score = float(
+        final_scores[best_index]
+    )
 
-        results.append(
-            {
-                "question":
-                    st.session_state.questions[index],
 
-                "answer":
-                    st.session_state.answers[index],
-
-                "score":
-                    float(final_scores[index])
-            }
-        )
-
-    return results
+    return (
+        questions[best_index],
+        st.session_state.answers[best_index],
+        best_score
+    )
 
 
 # ============================================================
@@ -585,113 +855,116 @@ def get_gemini_client():
 
     if not api_key:
 
+        api_key = os.getenv(
+            "GEMINI_API_KEY",
+            ""
+        )
+
+    if not api_key:
+
         return None
 
-    return genai.Client(
-        api_key=api_key
-    )
+    try:
+
+        return genai.Client(
+            api_key=api_key
+        )
+
+    except Exception:
+
+        return None
 
 
 # ============================================================
-# GEMINI ANSWER
+# AI ANSWER
 # ============================================================
 
 def generate_ai_answer(
     question,
-    matches
+    matched_question=None,
+    matched_answer=None,
+    score=0.0
 ):
 
     client = get_gemini_client()
 
     if client is None:
 
+        if matched_answer:
+
+            return matched_answer
+
         return (
             "Gemini API key is not configured. "
-            "Please add GEMINI_API_KEY to "
-            "Streamlit Secrets."
+            "Please add GEMINI_API_KEY in Streamlit Secrets."
         )
 
-    knowledge = ""
 
-    for item in matches[:4]:
+    # --------------------------------------------------------
+    # Dataset context
+    # --------------------------------------------------------
 
-        knowledge += f"""
+    if matched_answer:
 
-Question:
-{item["question"]}
+        context = f"""
+Knowledge Base Question:
+{matched_question}
 
-Answer:
-{item["answer"]}
+Knowledge Base Answer:
+{matched_answer}
 
+Similarity Score:
+{score:.2f}
 """
 
+    else:
+
+        context = """
+No reliable matching information was found
+in the uploaded knowledge base.
+"""
+
+
+    # --------------------------------------------------------
+    # System instruction
+    # --------------------------------------------------------
+
     prompt = f"""
-You are IntelliMind AI.
+You are IntelliMind AI, a helpful educational AI assistant.
 
-You are a professional educational
-AI assistant.
-
-User question:
+User Question:
 {question}
 
-Relevant knowledge:
-{knowledge}
+Knowledge Base:
+{context}
 
 Instructions:
 
-1. Understand the user's actual intention.
+1. Understand the user's question.
+2. Give a direct and useful answer.
+3. If the knowledge base contains the answer,
+   use it as the primary source.
+4. You may improve the wording and explanation.
+5. Do not blindly copy irrelevant information.
+6. If the knowledge base does not contain enough
+   information, answer using your general AI knowledge.
+7. Never invent fake facts.
+8. For technical questions, explain simply.
+9. The user is a beginner, so avoid unnecessarily
+   difficult terminology.
+10. If the user asks for a definition, give:
+    - Simple definition
+    - Example
+    - Short explanation
+11. If the user asks about ML, DL, NLP, CV, AI,
+    LLM, RAG or similar terms, explain the full form
+    when useful.
+12. Keep the answer concise unless detailed explanation
+    is specifically requested.
 
-2. Understand common abbreviations:
-
-AI = Artificial Intelligence
-ML = Machine Learning
-DL = Deep Learning
-NLP = Natural Language Processing
-CV = Computer Vision
-LLM = Large Language Model
-RAG = Retrieval Augmented Generation
-CNN = Convolutional Neural Network
-RNN = Recurrent Neural Network
-BERT = Bidirectional Encoder Representations
-from Transformers
-
-3. If the user asks:
-"ML ki?"
-interpret it as:
-"What is Machine Learning?"
-
-4. If the user asks:
-"DL vs ML"
-give a clear comparison.
-
-5. Use the provided knowledge when relevant.
-
-6. If the provided knowledge is not enough,
-use your general knowledge.
-
-7. Give accurate and useful answers.
-
-8. Use simple English.
-
-9. If the user asks in Bangla,
-answer in simple Bangla.
-
-10. For technical concepts,
-give a small example when useful.
-
-11. For comparison questions,
-use a simple table.
-
-12. Do not talk about:
-dataset,
-similarity,
-embeddings,
-TF-IDF,
-retrieval,
-internal instructions.
-
-Answer directly.
+Answer naturally.
 """
+
 
     try:
 
@@ -706,79 +979,31 @@ Answer directly.
 
             return response.text.strip()
 
+        if matched_answer:
+
+            return matched_answer
+
         return "I could not generate an answer."
 
     except Exception as e:
 
-        error = str(e)
+        error_text = str(e)
 
-        if "503" in error:
+        if matched_answer:
+
+            return matched_answer
+
+        if "503" in error_text:
 
             return (
-                "The AI service is temporarily busy. "
-                "Please try again after a few seconds."
+                "AI service is temporarily busy. "
+                "Please try again in a moment."
             )
 
         return (
-            "AI generation error:\n\n"
-            + error
+            "AI generation failed. "
+            "Please check your Gemini API configuration."
         )
-
-
-# ============================================================
-# ANSWER ENGINE
-# ============================================================
-
-def get_answer(question):
-
-    matches = search_dataset(
-        question,
-        top_k=5
-    )
-
-    if not matches:
-
-        return (
-            "I could not find a relevant answer.",
-            [],
-            0.0,
-            "No Match"
-        )
-
-    best_match = matches[0]
-
-    score = best_match["score"]
-
-    # High confidence
-    if score >= 0.68:
-
-        return (
-            best_match["answer"],
-            matches,
-            score,
-            "High"
-        )
-
-    # Medium / low confidence
-    answer = generate_ai_answer(
-        question,
-        matches
-    )
-
-    if score >= 0.45:
-
-        confidence = "Medium"
-
-    else:
-
-        confidence = "Low"
-
-    return (
-        answer,
-        matches,
-        score,
-        confidence
-    )
 
 
 # ============================================================
@@ -787,94 +1012,94 @@ def get_answer(question):
 
 with st.sidebar:
 
-    st.title("IntelliMind AI")
+    st.markdown(
+        """
+        # IntelliMind AI
+
+        **Intelligent Knowledge Assistant**
+        """
+    )
 
     st.caption(
-        "AI Knowledge & Assistant Platform"
+        "Semantic Search • NLP • Generative AI"
     )
 
     st.divider()
 
-    st.subheader("Workspace")
 
-    page = st.radio(
+    # --------------------------------------------------------
+    # Navigation
+    # --------------------------------------------------------
+
+    page = st.selectbox(
         "Navigation",
         [
             "AI Assistant",
             "Knowledge Base",
             "About"
-        ],
-        label_visibility="collapsed"
+        ]
     )
 
-    st.session_state.active_page = page
 
     st.divider()
 
-    st.subheader("Knowledge Base")
+
+    # --------------------------------------------------------
+    # Dataset uploader
+    # --------------------------------------------------------
+
+    st.subheader(
+        "Knowledge Base"
+    )
 
     uploaded_file = st.file_uploader(
-        "Upload TXT dataset",
+        "Upload your TXT dataset",
         type=["txt"],
-        help="Format: Question | Answer"
+        help=(
+            "Each line should use: "
+            "Question | Answer"
+        )
     )
+
+
+    # --------------------------------------------------------
+    # Process dataset
+    # --------------------------------------------------------
 
     if uploaded_file is not None:
 
-        try:
+        if (
+            st.session_state.dataset_name
+            != uploaded_file.name
+        ):
 
-            questions, answers = parse_dataset(
-                uploaded_file
-            )
+            with st.spinner(
+                "Processing knowledge base..."
+            ):
 
-            if not questions:
-
-                st.error(
-                    "No valid Question | Answer "
-                    "entries found."
+                questions, answers = parse_dataset(
+                    uploaded_file
                 )
 
-            else:
+                if questions:
 
-                dataset_key = (
-                    uploaded_file.name,
-                    uploaded_file.size
-                )
+                    st.session_state.questions = questions
 
-                if (
-                    st.session_state.dataset_key
-                    != dataset_key
-                ):
+                    st.session_state.answers = answers
 
-                    with st.spinner(
-                        "Building knowledge index..."
-                    ):
+                    st.session_state.dataset_name = (
+                        uploaded_file.name
+                    )
 
-                        embeddings = (
-                            create_embeddings(
-                                tuple(questions)
-                            )
+                    # TF-IDF
+
+                    vectorizer, matrix = (
+                        prepare_tfidf(
+                            tuple(questions)
                         )
-
-                        vectorizer, matrix = (
-                            create_tfidf(
-                                tuple(questions)
-                            )
-                        )
-
-                    st.session_state.questions = (
-                        questions
                     )
 
-                    st.session_state.answers = (
-                        answers
-                    )
-
-                    st.session_state.embeddings = (
-                        embeddings
-                    )
-
-                    st.session_state.tfidf_vectorizer = (
+                    st.session_state.vectorizer = (
                         vectorizer
                     )
 
@@ -882,31 +1107,67 @@ with st.sidebar:
                         matrix
                     )
 
-                    st.session_state.dataset_key = (
-                        dataset_key
+                    # Semantic embeddings
+
+                    st.session_state.semantic_embeddings = (
+                        create_embeddings(
+                            tuple(questions)
+                        )
                     )
 
-                    st.session_state.messages = []
+                    st.session_state.dataset_loaded = True
 
-                st.success(
-                    f"{len(questions)} entries loaded"
-                )
+                    st.success(
+                        f"{len(questions)} entries loaded"
+                    )
 
-        except Exception as e:
+                else:
 
-            st.error(
-                f"Dataset error: {e}"
+                    st.error(
+                        "No valid Question | Answer "
+                        "entries found."
+                    )
+
+
+    # --------------------------------------------------------
+    # Dataset statistics
+    # --------------------------------------------------------
+
+    if st.session_state.dataset_loaded:
+
+        st.metric(
+            "Knowledge Entries",
+            len(
+                st.session_state.questions
             )
+        )
+
+        st.caption(
+            st.session_state.dataset_name
+        )
 
     else:
 
         st.info(
-            "Upload your TXT knowledge base."
+            "Upload dataset.txt to activate "
+            "the knowledge base."
         )
+
 
     st.divider()
 
-    st.subheader("Conversation")
+
+    # --------------------------------------------------------
+    # Conversation
+    # --------------------------------------------------------
+
+    st.subheader(
+        "Conversation"
+    )
+
+    st.caption(
+        f"{len(st.session_state.messages)} messages"
+    )
 
     if st.button(
         "Clear Conversation",
@@ -917,129 +1178,273 @@ with st.sidebar:
 
         st.rerun()
 
+
     st.divider()
 
-    st.caption(
-        "Semantic Search + TF-IDF + Gemini"
+
+    # --------------------------------------------------------
+    # Status
+    # --------------------------------------------------------
+
+    st.subheader(
+        "System Status"
+    )
+
+    if st.session_state.dataset_loaded:
+
+        st.success(
+            "Knowledge Base: Ready"
+        )
+
+    else:
+
+        st.warning(
+            "Knowledge Base: Waiting"
+        )
+
+
+    if get_gemini_client():
+
+        st.success(
+            "Generative AI: Connected"
+        )
+
+    else:
+
+        st.warning(
+            "Generative AI: API key missing"
+        )
+
+
+# ============================================================
+# HERO
+# ============================================================
+
+if page == "AI Assistant":
+
+    st.markdown(
+        """
+        <div class="hero">
+
+            <div class="hero-content">
+
+                <div class="hero-title">
+                    IntelliMind AI
+                </div>
+
+                <div class="hero-subtitle">
+                    An intelligent knowledge assistant
+                    powered by semantic search,
+                    natural language processing and
+                    generative AI.
+                </div>
+
+                <div class="hero-badge">
+                    AI SYSTEM READY
+                </div>
+
+            </div>
+
+        </div>
+        """,
+        unsafe_allow_html=True
     )
 
 
 # ============================================================
-# PAGE: AI ASSISTANT
+# AI ASSISTANT PAGE
 # ============================================================
 
 if page == "AI Assistant":
 
     # --------------------------------------------------------
-    # HEADER
+    # Statistics
     # --------------------------------------------------------
 
-    st.title(
-        "AI Assistant"
-    )
+    col1, col2, col3, col4 = st.columns(4)
 
-    st.caption(
-        "Ask questions and get intelligent answers "
-        "from your knowledge base."
-    )
+    with col1:
 
-    # --------------------------------------------------------
-    # TOP STATS
-    # --------------------------------------------------------
-
-    if st.session_state.questions:
-
-        c1, c2, c3, c4 = st.columns(4)
-
-        with c1:
-
-            st.metric(
-                "Knowledge Entries",
-                len(
-                    st.session_state.questions
-                )
+        st.metric(
+            "Knowledge Entries",
+            len(
+                st.session_state.questions
             )
-
-        with c2:
-
-            st.metric(
-                "Search Engine",
-                "Semantic"
-            )
-
-        with c3:
-
-            st.metric(
-                "AI Model",
-                "Gemini"
-            )
-
-        with c4:
-
-            st.metric(
-                "Status",
-                "Ready"
-            )
-
-    else:
-
-        st.info(
-            "Upload your TXT dataset from the sidebar "
-            "to activate the knowledge assistant."
         )
 
+    with col2:
+
+        st.metric(
+            "Messages",
+            len(
+                st.session_state.messages
+            )
+        )
+
+    with col3:
+
+        st.metric(
+            "Search Engine",
+            "Hybrid"
+        )
+
+    with col4:
+
+        st.metric(
+            "AI Model",
+            "Gemini"
+        )
+
+
+    st.write("")
+
+
     # --------------------------------------------------------
-    # WELCOME AREA
+    # Welcome
     # --------------------------------------------------------
 
     if not st.session_state.messages:
 
-        st.divider()
-
         st.subheader(
-            "Start a conversation"
+            "How can I help you?"
         )
 
         st.write(
-            "Ask a question about AI, Machine Learning, "
-            "Deep Learning, NLP, Computer Vision, "
-            "Python or any topic contained in your dataset."
+            "Ask a question about AI, ML, DL, NLP, "
+            "Computer Vision, Python or any topic "
+            "included in your knowledge base."
         )
+
 
         st.write("")
 
-        col1, col2 = st.columns(2)
 
-        with col1:
+        # Suggested questions
 
-            st.info(
-                "**Machine Learning**\n\n"
-                "What is ML?\n\n"
-                "How does machine learning work?"
-            )
+        st.write(
+            "**Try asking:**"
+        )
 
-            st.info(
-                "**Natural Language Processing**\n\n"
-                "What is NLP?\n\n"
-                "What are NLP applications?"
-            )
+        suggestions = [
+            "What is AI?",
+            "What is Machine Learning?",
+            "What is Deep Learning?",
+            "What is NLP?",
+            "What is Computer Vision?",
+            "What is an LLM?"
+        ]
 
-        with col2:
 
-            st.info(
-                "**Deep Learning**\n\n"
-                "What is DL?\n\n"
-                "DL vs ML."
-            )
+        s1, s2, s3 = st.columns(3)
 
-            st.info(
-                "**Computer Vision**\n\n"
-                "What is CV?\n\n"
-                "What are computer vision applications?"
-            )
+
+        with s1:
+
+            if st.button(
+                suggestions[0],
+                use_container_width=True
+            ):
+
+                st.session_state.messages.append(
+                    {
+                        "role": "user",
+                        "content": suggestions[0]
+                    }
+                )
+
+                st.rerun()
+
+
+        with s2:
+
+            if st.button(
+                suggestions[1],
+                use_container_width=True
+            ):
+
+                st.session_state.messages.append(
+                    {
+                        "role": "user",
+                        "content": suggestions[1]
+                    }
+                )
+
+                st.rerun()
+
+
+        with s3:
+
+            if st.button(
+                suggestions[2],
+                use_container_width=True
+            ):
+
+                st.session_state.messages.append(
+                    {
+                        "role": "user",
+                        "content": suggestions[2]
+                    }
+                )
+
+                st.rerun()
+
+
+        s4, s5, s6 = st.columns(3)
+
+
+        with s4:
+
+            if st.button(
+                suggestions[3],
+                use_container_width=True
+            ):
+
+                st.session_state.messages.append(
+                    {
+                        "role": "user",
+                        "content": suggestions[3]
+                    }
+                )
+
+                st.rerun()
+
+
+        with s5:
+
+            if st.button(
+                suggestions[4],
+                use_container_width=True
+            ):
+
+                st.session_state.messages.append(
+                    {
+                        "role": "user",
+                        "content": suggestions[4]
+                    }
+                )
+
+                st.rerun()
+
+
+        with s6:
+
+            if st.button(
+                suggestions[5],
+                use_container_width=True
+            ):
+
+                st.session_state.messages.append(
+                    {
+                        "role": "user",
+                        "content": suggestions[5]
+                    }
+                )
+
+                st.rerun()
+
 
     # --------------------------------------------------------
-    # CHAT HISTORY
+    # Display previous messages
     # --------------------------------------------------------
 
     for message in st.session_state.messages:
@@ -1052,125 +1457,160 @@ if page == "AI Assistant":
                 message["content"]
             )
 
-            if (
-                message["role"] == "assistant"
-                and message.get("matches")
-            ):
-
-                with st.expander(
-                    "View knowledge details"
-                ):
-
-                    confidence = message.get(
-                        "confidence",
-                        "Unknown"
-                    )
-
-                    score = message.get(
-                        "score",
-                        0
-                    )
-
-                    st.write(
-                        f"Confidence: **{confidence}**"
-                    )
-
-                    st.write(
-                        f"Best match score: "
-                        f"**{score:.3f}**"
-                    )
-
-                    st.divider()
-
-                    for i, item in enumerate(
-                        message["matches"][:3],
-                        start=1
-                    ):
-
-                        st.write(
-                            f"**Match {i}**"
-                        )
-
-                        st.write(
-                            item["question"]
-                        )
-
-                        st.caption(
-                            f"Similarity: "
-                            f"{item['score']:.3f}"
-                        )
-
-                        st.divider()
 
     # --------------------------------------------------------
-    # CHAT INPUT
+    # Chat Input
     # --------------------------------------------------------
 
-    user_question = st.chat_input(
-        "Ask IntelliMind AI..."
+    question = st.chat_input(
+        "Ask IntelliMind AI anything..."
     )
 
-    if user_question:
 
-        if not st.session_state.questions:
+    if question:
 
-            st.warning(
-                "Please upload your TXT dataset first."
-            )
-
-            st.stop()
-
+        # ----------------------------------------------------
         # User message
+        # ----------------------------------------------------
+
         st.session_state.messages.append(
             {
                 "role": "user",
-                "content": user_question
+                "content": question
             }
         )
+
 
         with st.chat_message("user"):
 
             st.markdown(
-                user_question
+                question
             )
 
+
+        # ----------------------------------------------------
         # AI response
+        # ----------------------------------------------------
+
         with st.chat_message("assistant"):
 
             with st.spinner(
-                "Analyzing your question..."
+                "Thinking..."
             ):
 
-                (
-                    answer,
-                    matches,
-                    score,
-                    confidence
-                ) = get_answer(
-                    user_question
+                if (
+                    st.session_state.dataset_loaded
+                ):
+
+                    matched_question, matched_answer, score = (
+                        find_best_answer(
+                            question
+                        )
+                    )
+
+                else:
+
+                    matched_question = None
+
+                    matched_answer = None
+
+                    score = 0.0
+
+
+                # --------------------------------------------
+                # Response strategy
+                # --------------------------------------------
+
+                if (
+                    matched_answer
+                    and score >= 0.58
+                ):
+
+                    # Strong dataset match
+
+                    answer = matched_answer
+
+
+                elif (
+                    matched_answer
+                    and score >= 0.38
+                ):
+
+                    # Medium match
+                    # Let Gemini improve it
+
+                    answer = generate_ai_answer(
+
+                        question,
+
+                        matched_question,
+
+                        matched_answer,
+
+                        score
+                    )
+
+
+                else:
+
+                    # Weak/no dataset match
+                    # Gemini fallback
+
+                    answer = generate_ai_answer(
+
+                        question,
+
+                        None,
+
+                        None,
+
+                        0.0
+                    )
+
+
+                st.markdown(
+                    answer
                 )
 
-            st.markdown(
-                answer
-            )
+
+                # --------------------------------------------
+                # Search information
+                # --------------------------------------------
+
+                if matched_question:
+
+                    with st.expander(
+                        "Knowledge match details"
+                    ):
+
+                        st.write(
+                            "**Matched Question:**"
+                        )
+
+                        st.write(
+                            matched_question
+                        )
+
+                        st.write(
+                            f"**Similarity:** "
+                            f"{score:.2%}"
+                        )
+
+
+        # ----------------------------------------------------
+        # Save assistant message
+        # ----------------------------------------------------
 
         st.session_state.messages.append(
             {
                 "role": "assistant",
-
-                "content": answer,
-
-                "matches": matches,
-
-                "score": score,
-
-                "confidence": confidence
+                "content": answer
             }
         )
 
 
 # ============================================================
-# PAGE: KNOWLEDGE BASE
+# KNOWLEDGE BASE PAGE
 # ============================================================
 
 elif page == "Knowledge Base":
@@ -1180,75 +1620,77 @@ elif page == "Knowledge Base":
     )
 
     st.caption(
-        "Manage and inspect your uploaded "
-        "Question | Answer dataset."
+        "Manage and inspect your uploaded AI knowledge."
     )
 
-    if not st.session_state.questions:
+
+    if not st.session_state.dataset_loaded:
 
         st.info(
-            "No knowledge base loaded yet. "
-            "Upload a TXT file from the sidebar."
+            "No dataset is loaded yet. "
+            "Upload dataset.txt from the sidebar."
         )
 
     else:
 
-        c1, c2, c3 = st.columns(3)
+        col1, col2, col3 = st.columns(3)
 
-        with c1:
+        with col1:
 
             st.metric(
-                "Total Questions",
+                "Total Entries",
                 len(
                     st.session_state.questions
                 )
             )
 
-        with c2:
+        with col2:
 
             st.metric(
-                "Total Answers",
-                len(
-                    st.session_state.answers
-                )
+                "Dataset",
+                st.session_state.dataset_name
             )
 
-        with c3:
+        with col3:
 
             st.metric(
-                "Index",
-                "Ready"
+                "Search",
+                "Semantic + TF-IDF"
             )
+
 
         st.divider()
+
 
         st.subheader(
             "Dataset Preview"
         )
 
-        preview_count = min(
-            20,
-            len(
-                st.session_state.questions
-            )
-        )
 
-        for i in range(
-            preview_count
+        # Show first 20 entries
+
+        for i, (
+            question,
+            answer
+        ) in enumerate(
+            zip(
+                st.session_state.questions[:20],
+                st.session_state.answers[:20]
+            ),
+            start=1
         ):
 
             with st.expander(
-                f"{i + 1}. "
-                f"{st.session_state.questions[i]}"
+                f"{i}. {question}"
             ):
 
                 st.write(
-                    st.session_state.answers[i]
+                    answer
                 )
 
 
 # ============================================================
-# PAGE: ABOUT
+# ABOUT PAGE
 # ============================================================
 
 elif page == "About":
@@ -1257,85 +1699,87 @@ elif page == "About":
         "About IntelliMind AI"
     )
 
-    st.caption(
-        "An NLP-powered educational AI assistant."
-    )
-
-    st.divider()
-
-    st.subheader(
-        "System Architecture"
-    )
-
     st.write(
-        "The application combines multiple techniques "
-        "to provide more useful answers."
+        """
+        **IntelliMind AI** is an intelligent educational
+        knowledge assistant that combines a custom
+        knowledge base with semantic search and
+        Generative AI.
+        """
     )
 
-    c1, c2 = st.columns(2)
-
-    with c1:
-
-        st.info(
-            "**1. Knowledge Base**\n\n"
-            "Questions and answers are loaded "
-            "from an external TXT file."
-        )
-
-        st.info(
-            "**2. Semantic Search**\n\n"
-            "Sentence embeddings are used to "
-            "understand the meaning of questions."
-        )
-
-        st.info(
-            "**3. TF-IDF Search**\n\n"
-            "Lexical similarity helps improve "
-            "exact keyword matching."
-        )
-
-    with c2:
-
-        st.info(
-            "**4. Hybrid Retrieval**\n\n"
-            "Semantic and lexical scores are "
-            "combined for better matching."
-        )
-
-        st.info(
-            "**5. Generative AI**\n\n"
-            "Gemini provides intelligent answers "
-            "when the dataset is not sufficient."
-        )
-
-        st.info(
-            "**6. Short Forms**\n\n"
-            "The system understands AI, ML, DL, "
-            "NLP, CV, LLM, RAG and many other terms."
-        )
 
     st.divider()
 
+
     st.subheader(
-        "Supported Short Forms"
+        "Core Technologies"
     )
 
-    form_cols = st.columns(4)
 
-    short_items = list(
-        SHORT_FORMS.items()
+    col1, col2 = st.columns(2)
+
+
+    with col1:
+
+        st.markdown(
+            """
+            **Natural Language Processing**
+
+            - Text preprocessing
+            - Query expansion
+            - TF-IDF
+            - Semantic similarity
+            - Sentence embeddings
+            """
+        )
+
+
+    with col2:
+
+        st.markdown(
+            """
+            **Artificial Intelligence**
+
+            - Gemini Generative AI
+            - Semantic Search
+            - Knowledge Base Retrieval
+            - AI Question Answering
+            - Hybrid Retrieval
+            """
+        )
+
+
+    st.divider()
+
+
+    st.subheader(
+        "Short Forms"
     )
 
-    for i, (short, full) in enumerate(
-        short_items
-    ):
 
-        with form_cols[i % 4]:
+    for short, full in SHORT_FORMS.items():
 
-            st.write(
-                f"**{short.upper()}**"
-            )
+        st.write(
+            f"**{short.upper()}** → {full.title()}"
+        )
 
-            st.caption(
-                full.title()
-            )
+
+# ============================================================
+# FOOTER
+# ============================================================
+
+st.markdown(
+    """
+    <div style="
+        text-align:center;
+        margin-top:50px;
+        padding:20px;
+        color:#718096;
+        font-size:12px;
+    ">
+        IntelliMind AI • Semantic Search • NLP • Generative AI
+    </div>
+    """,
+    unsafe_allow_html=True
+)
