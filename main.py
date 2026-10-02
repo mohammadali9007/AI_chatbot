@@ -1,14 +1,10 @@
 import streamlit as st
 import re
-import requests
-import numpy as np
-
+import os
 from pypdf import PdfReader
-
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
+from sklearn.metrics.pairwise import cosine_similarity
 
-from sentence_transformers import SentenceTransformer
 from google import genai
 
 
@@ -18,95 +14,99 @@ from google import genai
 
 st.set_page_config(
     page_title="IntelliMind AI",
-    page_icon="🧠",
+    page_icon="🤖",
     layout="wide"
 )
 
 
 # =========================================================
-# CSS
+# CUSTOM CSS
+# =========================================================
+
+st.markdown("""
+<style>
+.main {
+    padding-top: 1rem;
+}
+
+.title {
+    text-align: center;
+    font-size: 42px;
+    font-weight: bold;
+}
+
+.subtitle {
+    text-align: center;
+    font-size: 18px;
+    color: gray;
+}
+
+.answer-box {
+    padding: 20px;
+    border-radius: 12px;
+    border: 1px solid #ddd;
+    margin-top: 15px;
+}
+
+.info-box {
+    padding: 15px;
+    border-radius: 10px;
+    background-color: rgba(100,100,100,0.08);
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+# =========================================================
+# TITLE
 # =========================================================
 
 st.markdown(
-    """
-    <style>
-
-    .stApp {
-        background: linear-gradient(
-            135deg,
-            #eef2ff,
-            #f8fafc,
-            #ecfeff
-        );
-    }
-
-    .hero {
-        padding: 35px;
-        border-radius: 25px;
-        background: linear-gradient(
-            135deg,
-            #4f46e5,
-            #7c3aed,
-            #0891b2
-        );
-        color: white;
-        margin-bottom: 25px;
-        box-shadow: 0 10px 30px rgba(79,70,229,.25);
-    }
-
-    .hero h1 {
-        font-size: 42px;
-        margin-bottom: 5px;
-    }
-
-    .hero p {
-        font-size: 18px;
-    }
-
-    .card {
-        background: white;
-        padding: 22px;
-        border-radius: 18px;
-        margin-bottom: 15px;
-        box-shadow: 0 5px 20px rgba(0,0,0,.08);
-    }
-
-    .badge {
-        display: inline-block;
-        padding: 7px 14px;
-        margin: 4px;
-        border-radius: 20px;
-        background: rgba(255,255,255,.2);
-        color: white;
-        font-size: 13px;
-    }
-
-    .source {
-        background: #f1f5f9;
-        padding: 12px;
-        border-radius: 12px;
-        margin-top: 8px;
-    }
-
-    .answer-box {
-        background: white;
-        padding: 20px;
-        border-radius: 18px;
-        box-shadow: 0 5px 20px rgba(0,0,0,.06);
-    }
-
-    </style>
-    """,
+    '<div class="title">🤖 IntelliMind AI</div>',
     unsafe_allow_html=True
 )
+
+st.markdown(
+    '<div class="subtitle">Knowledge Base + Google Gemini AI Assistant</div>',
+    unsafe_allow_html=True
+)
+
+st.write("")
+
+
+# =========================================================
+# GEMINI CLIENT
+# =========================================================
+
+def get_gemini_client():
+
+    api_key = None
+
+    # Streamlit Cloud Secrets
+    try:
+        api_key = st.secrets["GEMINI_API_KEY"]
+    except Exception:
+        pass
+
+    # Local environment variable
+    if not api_key:
+        api_key = os.getenv("GEMINI_API_KEY")
+
+    if not api_key:
+        return None
+
+    try:
+        return genai.Client(api_key=api_key)
+    except Exception:
+        return None
+
+
+client = get_gemini_client()
 
 
 # =========================================================
 # SESSION STATE
 # =========================================================
-
-if "messages" not in st.session_state:
-    st.session_state.messages = []
 
 if "documents" not in st.session_state:
     st.session_state.documents = []
@@ -114,14 +114,8 @@ if "documents" not in st.session_state:
 if "chunks" not in st.session_state:
     st.session_state.chunks = []
 
-if "embeddings" not in st.session_state:
-    st.session_state.embeddings = None
-
-if "sources" not in st.session_state:
-    st.session_state.sources = []
-
-if "questions" not in st.session_state:
-    st.session_state.questions = 0
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
 
 # =========================================================
@@ -130,260 +124,73 @@ if "questions" not in st.session_state:
 
 def clean_text(text):
 
-    text = text.lower()
+    text = text.replace("\x00", " ")
 
-    text = re.sub(
-        r"https?://\S+|www\.\S+",
-        " ",
-        text
-    )
-
-    text = re.sub(
-        r"\S+@\S+",
-        " ",
-        text
-    )
-
-    text = re.sub(
-        r"[^a-zA-Z0-9\s+#.-]",
-        " ",
-        text
-    )
-
-    text = re.sub(
-        r"\s+",
-        " ",
-        text
-    )
+    text = re.sub(r"\s+", " ", text)
 
     return text.strip()
 
 
 # =========================================================
-# SIMPLE CONVERSATION HANDLER
+# SPLIT TEXT INTO CHUNKS
 # =========================================================
 
-def simple_chat_answer(question):
+def split_text(text, chunk_size=700, overlap=100):
 
-    q = question.lower().strip()
+    text = clean_text(text)
 
-    # Greetings
-    greetings = {
-        "hi": "Hello! 👋 How can I help you today?",
-        "hello": "Hello! 👋 How can I help you today?",
-        "hey": "Hey! 👋 How can I help you?",
-        "hi there": "Hello! 👋 How can I help you today?",
-        "good morning": "Good morning! ☀️ How can I help you?",
-        "good afternoon": "Good afternoon! 😊 How can I help you?",
-        "good evening": "Good evening! 🌙 How can I help you?"
-    }
+    if not text:
+        return []
 
-    if q in greetings:
-        return greetings[q]
+    chunks = []
 
-    # How are you
-    if q in [
-        "how are you",
-        "how are you?",
-        "how r you",
-        "how r u",
-        "how r u?"
-    ]:
-        return (
-            "I'm doing well! 😊 Thanks for asking. "
-            "How can I help you today?"
-        )
+    start = 0
 
-    # Thanks
-    if q in [
-        "thanks",
-        "thank you",
-        "thanks!",
-        "thank you!"
-    ]:
-        return "You're welcome! 😊"
+    while start < len(text):
 
-    # Goodbye
-    if q in [
-        "bye",
-        "goodbye",
-        "bye!",
-        "goodbye!"
-    ]:
-        return (
-            "Goodbye! 👋 Have a great day!"
-        )
+        end = start + chunk_size
 
-    return None
+        chunk = text[start:end]
+
+        if chunk.strip():
+            chunks.append(chunk.strip())
+
+        start += chunk_size - overlap
+
+    return chunks
 
 
 # =========================================================
-# ML INTENT CLASSIFIER
+# READ TXT FILE
 # =========================================================
 
-questions = [
+def read_txt(uploaded_file):
 
-    "what is nlp",
-    "define natural language processing",
-    "explain natural language processing",
-    "how does nlp work",
+    try:
 
-    "what is machine learning",
-    "define machine learning",
-    "explain machine learning",
-    "how does machine learning work",
-
-    "what is deep learning",
-    "define deep learning",
-    "explain deep learning",
-
-    "what is artificial intelligence",
-    "what is ai",
-    "explain artificial intelligence",
-
-    "what is python",
-    "explain python programming",
-
-    "what is computer vision",
-    "explain computer vision",
-
-    "what is neural network",
-    "how does neural network work",
-
-    "what is sentiment analysis",
-    "explain sentiment analysis",
-
-    "what is chatbot",
-    "how does chatbot work",
-
-    "what is transformer",
-    "what is bert",
-    "what is llm",
-
-    "what is generative ai",
-    "what is rag",
-    "what is natural language understanding"
-]
-
-
-labels = [
-
-    "NLP",
-    "NLP",
-    "NLP",
-    "NLP",
-
-    "Machine Learning",
-    "Machine Learning",
-    "Machine Learning",
-    "Machine Learning",
-
-    "Deep Learning",
-    "Deep Learning",
-    "Deep Learning",
-
-    "Artificial Intelligence",
-    "Artificial Intelligence",
-    "Artificial Intelligence",
-
-    "Python",
-    "Python",
-
-    "Computer Vision",
-    "Computer Vision",
-
-    "Neural Network",
-    "Neural Network",
-
-    "Sentiment Analysis",
-    "Sentiment Analysis",
-
-    "Chatbot",
-    "Chatbot",
-
-    "Transformer",
-    "Transformer",
-    "Transformer",
-
-    "Generative AI",
-    "RAG",
-    "NLP"
-]
-
-
-vectorizer = TfidfVectorizer(
-    ngram_range=(1, 2),
-    stop_words="english"
-)
-
-X = vectorizer.fit_transform(
-    questions
-)
-
-classifier = LogisticRegression(
-    max_iter=1000
-)
-
-classifier.fit(
-    X,
-    labels
-)
-
-
-def predict_intent(question):
-
-    X_test = vectorizer.transform(
-        [question]
-    )
-
-    prediction = classifier.predict(
-        X_test
-    )[0]
-
-    probabilities = classifier.predict_proba(
-        X_test
-    )[0]
-
-    confidence = max(probabilities)
-
-    return prediction, float(confidence)
-
-
-# =========================================================
-# EMBEDDING MODEL
-# =========================================================
-
-@st.cache_resource
-def load_embedding_model():
-
-    return SentenceTransformer(
-        "all-MiniLM-L6-v2"
-    )
-
-
-embedding_model = load_embedding_model()
-
-
-# =========================================================
-# FILE EXTRACTION
-# =========================================================
-
-def extract_file_text(file):
-
-    name = file.name.lower()
-
-    # TXT
-    if name.endswith(".txt"):
-
-        return file.read().decode(
+        text = uploaded_file.read().decode(
             "utf-8",
             errors="ignore"
         )
 
-    # PDF
-    if name.endswith(".pdf"):
+        return clean_text(text)
 
-        reader = PdfReader(file)
+    except Exception as e:
+
+        st.error(f"TXT reading error: {e}")
+
+        return ""
+
+
+# =========================================================
+# READ PDF FILE
+# =========================================================
+
+def read_pdf(uploaded_file):
+
+    try:
+
+        reader = PdfReader(uploaded_file)
 
         text = ""
 
@@ -392,497 +199,173 @@ def extract_file_text(file):
             page_text = page.extract_text()
 
             if page_text:
-
                 text += page_text + "\n"
 
-        return text
+        return clean_text(text)
 
-    return ""
+    except Exception as e:
+
+        st.error(f"PDF reading error: {e}")
+
+        return ""
 
 
 # =========================================================
-# CREATE CHUNKS
+# PROCESS UPLOADED FILE
 # =========================================================
 
-def create_chunks(
-    text,
-    chunk_size=180,
-    overlap=40
-):
+def process_file(uploaded_file):
 
-    text = re.sub(
-        r"\s+",
-        " ",
-        text
-    ).strip()
+    file_name = uploaded_file.name.lower()
 
-    if not text:
+    if file_name.endswith(".txt"):
+
+        text = read_txt(uploaded_file)
+
+    elif file_name.endswith(".pdf"):
+
+        text = read_pdf(uploaded_file)
+
+    else:
+
         return []
 
-    words = text.split()
+    if not text:
 
-    chunks = []
+        return []
 
-    start = 0
-
-    while start < len(words):
-
-        end = start + chunk_size
-
-        chunk = " ".join(
-            words[start:end]
-        )
-
-        if chunk:
-
-            chunks.append(chunk)
-
-        start += chunk_size - overlap
+    chunks = split_text(text)
 
     return chunks
 
 
 # =========================================================
-# ADD DOCUMENT
+# DATASET SEARCH
 # =========================================================
 
-def add_document(
-    text,
-    filename
-):
+def search_knowledge_base(question, top_k=4):
 
-    chunks = create_chunks(
-        text
-    )
+    chunks = st.session_state.chunks
 
     if not chunks:
-        return 0
 
-    embeddings = embedding_model.encode(
-        chunks,
-        convert_to_numpy=True,
-        normalize_embeddings=True
-    )
-
-    st.session_state.chunks.extend(
-        chunks
-    )
-
-    st.session_state.sources.extend(
-        [filename] * len(chunks)
-    )
-
-    if st.session_state.embeddings is None:
-
-        st.session_state.embeddings = embeddings
-
-    else:
-
-        st.session_state.embeddings = np.vstack(
-            [
-                st.session_state.embeddings,
-                embeddings
-            ]
-        )
-
-    st.session_state.documents.append(
-        filename
-    )
-
-    return len(chunks)
-
-
-# =========================================================
-# KEYWORD SCORE
-# =========================================================
-
-def keyword_score(
-    question,
-    text
-):
-
-    question_words = set(
-        clean_text(question).split()
-    )
-
-    text_words = set(
-        clean_text(text).split()
-    )
-
-    if not question_words:
-        return 0.0
-
-    common_words = (
-        question_words.intersection(
-            text_words
-        )
-    )
-
-    return len(common_words) / len(
-        question_words
-    )
-
-
-# =========================================================
-# HYBRID DOCUMENT SEARCH
-# =========================================================
-
-def search_documents(
-    question,
-    top_k=5
-):
-
-    if (
-        not st.session_state.chunks
-        or st.session_state.embeddings is None
-    ):
-        return []
-
-    # Semantic embedding
-    query_embedding = embedding_model.encode(
-        [question],
-        convert_to_numpy=True,
-        normalize_embeddings=True
-    )[0]
-
-    semantic_scores = np.dot(
-        st.session_state.embeddings,
-        query_embedding
-    )
-
-    results = []
-
-    for index in range(
-        len(st.session_state.chunks)
-    ):
-
-        text = st.session_state.chunks[index]
-
-        semantic = float(
-            semantic_scores[index]
-        )
-
-        keyword = keyword_score(
-            question,
-            text
-        )
-
-        # Hybrid score
-        final_score = (
-            semantic * 0.75
-            + keyword * 0.25
-        )
-
-        results.append(
-            {
-                "text": text,
-                "source": st.session_state.sources[index],
-                "score": final_score,
-                "semantic": semantic,
-                "keyword": keyword
-            }
-        )
-
-    results.sort(
-        key=lambda x: x["score"],
-        reverse=True
-    )
-
-    # Only relevant results
-    filtered = [
-        r for r in results
-        if r["score"] >= 0.25
-    ]
-
-    return filtered[:top_k]
-
-
-# =========================================================
-# WIKIPEDIA SEARCH
-# =========================================================
-
-def wikipedia_search(query):
+        return [], 0.0
 
     try:
 
-        search_url = (
-            "https://en.wikipedia.org/w/api.php"
+        documents = chunks + [question]
+
+        vectorizer = TfidfVectorizer(
+            stop_words="english"
         )
 
-        search_params = {
+        matrix = vectorizer.fit_transform(documents)
 
-            "action": "query",
+        question_vector = matrix[-1]
 
-            "list": "search",
+        document_vectors = matrix[:-1]
 
-            "srsearch": query,
+        similarities = cosine_similarity(
+            question_vector,
+            document_vectors
+        )[0]
 
-            "format": "json",
-
-            "srlimit": 3
-        }
-
-        headers = {
-            "User-Agent":
-            "IntelliMindAI/1.0"
-        }
-
-        response = requests.get(
-            search_url,
-            params=search_params,
-            headers=headers,
-            timeout=10
-        )
-
-        response.raise_for_status()
-
-        data = response.json()
-
-        search_items = data.get(
-            "query",
-            {}
-        ).get(
-            "search",
-            []
-        )
-
-        if not search_items:
-            return []
+        ranked_indices = similarities.argsort()[::-1]
 
         results = []
 
-        # Get article extracts
-        for item in search_items:
+        for index in ranked_indices[:top_k]:
 
-            title = item.get(
-                "title",
-                ""
+            score = float(similarities[index])
+
+            results.append(
+                {
+                    "text": chunks[index],
+                    "score": score
+                }
             )
 
-            extract_params = {
+        if results:
 
-                "action": "query",
+            best_score = results[0]["score"]
 
-                "prop": "extracts",
+        else:
 
-                "explaintext": 1,
+            best_score = 0.0
 
-                "exintro": 1,
+        return results, best_score
 
-                "exchars": 2500,
+    except Exception as e:
 
-                "titles": title,
-
-                "format": "json"
-            }
-
-            extract_response = requests.get(
-                search_url,
-                params=extract_params,
-                headers=headers,
-                timeout=10
-            )
-
-            extract_response.raise_for_status()
-
-            extract_data = (
-                extract_response.json()
-            )
-
-            pages = (
-                extract_data
-                .get("query", {})
-                .get("pages", {})
-            )
-
-            article_text = ""
-
-            for page in pages.values():
-
-                article_text = page.get(
-                    "extract",
-                    ""
-                )
-
-                break
-
-            if not article_text:
-
-                article_text = re.sub(
-                    "<.*?>",
-                    "",
-                    item.get(
-                        "snippet",
-                        ""
-                    )
-                )
-
-            if article_text:
-
-                results.append(
-                    {
-                        "title": title,
-                        "text": article_text
-                    }
-                )
-
-        return results
-
-    except Exception:
-
-        return []
+        return [], 0.0
 
 
 # =========================================================
-# RECENT CHAT CONTEXT
+# GEMINI RESPONSE
 # =========================================================
 
-def get_chat_history():
+def ask_gemini(question, context=""):
 
-    if not st.session_state.messages:
-        return ""
+    if client is None:
 
-    recent_messages = (
-        st.session_state.messages[-6:]
-    )
+        return None
 
-    history = []
+    if context:
 
-    for message in recent_messages:
+        prompt = f"""
+You are IntelliMind AI, a helpful AI assistant.
 
-        role = message["role"].upper()
+The user asked:
 
-        content = message["content"]
-
-        # Avoid sending extremely long history
-        content = content[:1500]
-
-        history.append(
-            f"{role}: {content}"
-        )
-
-    return "\n".join(history)
-
-
-# =========================================================
-# GEMINI ANSWER
-# =========================================================
-
-def generate_ai_answer(
-    question,
-    context,
-    intent
-):
-
-    api_key = st.secrets.get(
-        "GEMINI_API_KEY",
-        ""
-    )
-
-    # -----------------------------------------------------
-    # Chat history
-    # -----------------------------------------------------
-
-    chat_history = get_chat_history()
-
-    # -----------------------------------------------------
-    # Prompt
-    # -----------------------------------------------------
-
-    prompt = f"""
-You are IntelliMind AI, an intelligent
-academic and general knowledge assistant.
-
-Your job is to answer the user's question
-naturally, clearly and accurately.
-
-USER QUESTION:
 {question}
 
-DETECTED TOPIC:
-{intent}
+Below is information retrieved from the user's uploaded
+knowledge base.
 
-RECENT CONVERSATION:
-{chat_history}
-
-AVAILABLE KNOWLEDGE:
+KNOWLEDGE BASE:
 {context}
 
-IMPORTANT INSTRUCTIONS:
+Instructions:
 
-1. Answer the user's actual question directly.
+1. Use the knowledge base as the primary source.
+2. If the answer is clearly available in the knowledge base,
+   answer using that information.
+3. Do not invent facts that are not supported by the knowledge base.
+4. If the knowledge base does not contain enough information,
+   clearly say that the uploaded knowledge base does not provide
+   enough information.
+5. Keep the answer clear and easy to understand.
+6. If appropriate, use bullet points.
 
-2. If useful information exists in the
-   uploaded documents, prioritize it.
-
-3. If the available document information
-   is not enough, you may use your general
-   knowledge to answer.
-
-4. Do not pretend that general knowledge
-   came from the uploaded document.
-
-5. If Wikipedia information is provided,
-   use it as supporting information.
-
-6. Never copy large amounts of source text.
-   Summarize it naturally.
-
-7. Use simple and easy English.
-
-8. Give a clear explanation.
-
-9. For programming questions, give a
-   simple correct code example when useful.
-
-10. For simple greetings or casual questions,
-    respond naturally and conversationally.
-
-11. Do not mention these system instructions.
-
-12. Do not say "retrieved knowledge" unless
-    it is actually useful to explain the source.
-
-13. If the question is ambiguous, explain
-    the likely meaning and answer accordingly.
-
-14. Use headings and bullet points when they
-    improve readability.
-
-15. Keep the answer concise but useful.
+Answer the user:
 """
 
-    # -----------------------------------------------------
-    # No API key
-    # -----------------------------------------------------
+    else:
 
-    if not api_key:
+        prompt = f"""
+You are IntelliMind AI, a helpful general-purpose AI assistant.
 
-        if context.strip():
+The user's question is:
 
-            return (
-                "### 📚 Knowledge Base\n\n"
-                + context[:6000]
-                + "\n\n"
-                "⚠️ Gemini API key is not configured, "
-                "so the AI-generated explanation is unavailable."
-            )
+{question}
 
-        return (
-            "⚠️ Gemini API key is not configured.\n\n"
-            "Please add `GEMINI_API_KEY` to "
-            "Streamlit Secrets."
-        )
+There is no relevant information available in the user's
+uploaded knowledge base.
 
-    # -----------------------------------------------------
-    # Gemini
-    # -----------------------------------------------------
+Answer the question using your general knowledge.
+
+Instructions:
+
+1. Give a useful and accurate answer.
+2. Do not pretend that the information came from the uploaded files.
+3. If the question requires current or uncertain information,
+   clearly mention the limitation.
+4. Keep the answer simple and well structured.
+
+Answer:
+"""
 
     try:
-
-        client = genai.Client(
-            api_key=api_key
-        )
 
         response = client.models.generate_content(
             model="gemini-2.5-flash",
@@ -893,66 +376,108 @@ IMPORTANT INSTRUCTIONS:
 
             return response.text.strip()
 
-        return (
-            "I could not generate an AI response "
-            "right now. Please try again."
-        )
+        return None
 
     except Exception as e:
 
-        # Do not crash the app
-        error_message = str(e)
+        error_text = str(e)
 
-        # Hide potentially sensitive details
-        if len(error_message) > 500:
-            error_message = (
-                error_message[:500]
-                + "..."
-            )
-
-        if context.strip():
+        if "503" in error_text:
 
             return (
-                "### 📚 Available Knowledge\n\n"
-                + context[:6000]
-                + "\n\n"
-                "⚠️ Gemini could not generate the AI "
-                "response at this moment.\n\n"
-                f"**Technical reason:** `{error_message}`"
+                "⚠️ Gemini AI is temporarily unavailable because "
+                "the model is experiencing high demand. "
+                "Please try again in a few moments."
+            )
+
+        if "429" in error_text:
+
+            return (
+                "⚠️ Gemini API request limit reached. "
+                "Please wait and try again."
+            )
+
+        if "401" in error_text or "403" in error_text:
+
+            return (
+                "⚠️ Gemini API authentication failed. "
+                "Please check your API key."
             )
 
         return (
-            "⚠️ Gemini AI is temporarily unavailable.\n\n"
-            f"**Technical reason:** `{error_message}`"
+            "⚠️ Gemini could not generate the answer right now.\n\n"
+            f"Technical information: {error_text}"
         )
 
 
 # =========================================================
-# HEADER
+# GENERATE FINAL ANSWER
 # =========================================================
 
-st.markdown(
-    """
-    <div class="hero">
+def generate_answer(question):
 
-    <h1>🧠 IntelliMind AI</h1>
+    results, best_score = search_knowledge_base(
+        question,
+        top_k=4
+    )
 
-    <p>
-    Intelligent Knowledge Assistant
-    powered by NLP, Machine Learning,
-    Deep Learning, RAG & Generative AI.
-    </p>
+    # -----------------------------------------------------
+    # CASE 1: Relevant knowledge found
+    # -----------------------------------------------------
 
-    <span class="badge">NLP</span>
-    <span class="badge">ML</span>
-    <span class="badge">Deep Learning</span>
-    <span class="badge">RAG</span>
-    <span class="badge">Generative AI</span>
+    if results and best_score >= 0.15:
 
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+        selected_results = [
+            item
+            for item in results
+            if item["score"] >= 0.15
+        ]
+
+        context = "\n\n".join(
+            item["text"]
+            for item in selected_results
+        )
+
+        answer = ask_gemini(
+            question,
+            context
+        )
+
+        if answer:
+
+            return answer, "📚 Knowledge Base + Gemini", best_score
+
+        # Gemini unavailable → show dataset information
+
+        return (
+            context,
+            "📚 Knowledge Base",
+            best_score
+        )
+
+    # -----------------------------------------------------
+    # CASE 2: No relevant knowledge
+    # -----------------------------------------------------
+
+    answer = ask_gemini(
+        question,
+        ""
+    )
+
+    if answer:
+
+        return answer, "🌐 Gemini General AI", best_score
+
+    # -----------------------------------------------------
+    # CASE 3: Gemini unavailable
+    # -----------------------------------------------------
+
+    return (
+        "I couldn't find relevant information in the uploaded "
+        "knowledge base, and the AI service is currently unavailable.",
+        "⚠️ Fallback",
+        best_score
+    )
 
 
 # =========================================================
@@ -961,522 +486,155 @@ st.markdown(
 
 with st.sidebar:
 
-    st.header(
-        "⚙️ Knowledge Center"
-    )
+    st.header("📂 Knowledge Base")
 
     uploaded_files = st.file_uploader(
-        "Upload TXT or PDF",
+        "Upload TXT or PDF files",
         type=["txt", "pdf"],
         accept_multiple_files=True
     )
 
-    if st.button(
-        "📚 Process Documents",
-        use_container_width=True
-    ):
+    if uploaded_files:
 
-        if uploaded_files:
+        if st.button("🔄 Process Files", use_container_width=True):
+
+            all_chunks = []
+            file_names = []
 
             for file in uploaded_files:
 
-                if file.name not in st.session_state.documents:
+                chunks = process_file(file)
 
-                    text = extract_file_text(
-                        file
-                    )
+                if chunks:
 
-                    count = add_document(
-                        text,
-                        file.name
-                    )
+                    all_chunks.extend(chunks)
 
-                    if count > 0:
+                    file_names.append(file.name)
 
-                        st.success(
-                            f"{file.name}: "
-                            f"{count} chunks indexed"
-                        )
+            st.session_state.chunks = all_chunks
+            st.session_state.documents = file_names
 
-                    else:
-
-                        st.warning(
-                            f"{file.name}: "
-                            "No readable text found."
-                        )
-
-        else:
-
-            st.warning(
-                "Please upload a TXT or PDF file first."
+            st.success(
+                f"{len(file_names)} file(s) processed successfully!"
             )
 
     st.divider()
 
-    st.subheader(
-        "📊 Knowledge Base"
+    st.subheader("📊 Knowledge Base Status")
+
+    st.write(
+        f"Files: **{len(st.session_state.documents)}**"
     )
 
     st.write(
-        f"Documents: "
-        f"**{len(st.session_state.documents)}**"
+        f"Text chunks: **{len(st.session_state.chunks)}**"
     )
 
-    st.write(
-        f"Chunks: "
-        f"**{len(st.session_state.chunks)}**"
-    )
+    if client:
 
-    st.write(
-        f"Questions: "
-        f"**{st.session_state.questions}**"
-    )
+        st.success("🟢 Gemini API Connected")
 
-    external_search = st.toggle(
-        "🌐 External Knowledge",
-        value=True
-    )
+    else:
+
+        st.warning("🔴 Gemini API Not Connected")
 
     st.divider()
 
-    if st.button(
-        "🗑️ Clear Knowledge Base",
-        use_container_width=True
-    ):
+    if st.button("🗑️ Clear Chat", use_container_width=True):
 
-        st.session_state.documents = []
-
-        st.session_state.chunks = []
-
-        st.session_state.sources = []
-
-        st.session_state.embeddings = None
-
-        st.rerun()
-
-    if st.button(
-        "🧹 Clear Chat",
-        use_container_width=True
-    ):
-
-        st.session_state.messages = []
-
-        st.session_state.questions = 0
+        st.session_state.chat_history = []
 
         st.rerun()
 
 
 # =========================================================
-# DASHBOARD
+# SHOW UPLOADED FILES
 # =========================================================
 
-col1, col2, col3, col4 = st.columns(4)
+if st.session_state.documents:
 
-with col1:
+    st.markdown("### 📚 Uploaded Knowledge")
 
-    st.metric(
-        "📄 Documents",
-        len(
-            st.session_state.documents
-        )
+    cols = st.columns(
+        min(len(st.session_state.documents), 4)
     )
 
-with col2:
+    for i, name in enumerate(
+        st.session_state.documents
+    ):
 
-    st.metric(
-        "🧩 Knowledge Chunks",
-        len(
-            st.session_state.chunks
-        )
-    )
+        with cols[i % len(cols)]:
 
-with col3:
-
-    st.metric(
-        "💬 Questions",
-        st.session_state.questions
-    )
-
-with col4:
-
-    st.metric(
-        "🤖 AI System",
-        "Online"
-    )
-
-
-# =========================================================
-# FEATURES
-# =========================================================
-
-st.markdown(
-    "## 🚀 System Features"
-)
-
-c1, c2, c3 = st.columns(3)
-
-with c1:
-
-    st.markdown(
-        """
-        <div class="card">
-
-        <h3>📝 NLP Processing</h3>
-
-        Text cleaning, preprocessing
-        and natural language processing.
-
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-with c2:
-
-    st.markdown(
-        """
-        <div class="card">
-
-        <h3>🤖 ML Classification</h3>
-
-        TF-IDF based intent
-        classification.
-
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-with c3:
-
-    st.markdown(
-        """
-        <div class="card">
-
-        <h3>🧠 Semantic RAG</h3>
-
-        Hybrid semantic + keyword
-        document retrieval.
-
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+            st.info(f"📄 {name}")
 
 
 # =========================================================
 # CHAT HISTORY
 # =========================================================
 
-st.markdown(
-    "## 💬 Ask IntelliMind"
-)
+for message in st.session_state.chat_history:
 
-for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
 
-    with st.chat_message(
-        message["role"]
-    ):
+        st.markdown(message["content"])
 
-        st.markdown(
-            message["content"]
-        )
+        if message["role"] == "assistant":
+
+            if "source" in message:
+
+                st.caption(
+                    f"Source: {message['source']}"
+                )
 
 
 # =========================================================
-# USER QUESTION
+# CHAT INPUT
 # =========================================================
 
 question = st.chat_input(
-    "✨ Ask anything..."
+    "Ask me anything..."
 )
 
 
+# =========================================================
+# HANDLE QUESTION
+# =========================================================
+
 if question:
 
-    # =====================================================
-    # COUNT
-    # =====================================================
+    # User message
 
-    st.session_state.questions += 1
-
-    # =====================================================
-    # SAVE USER MESSAGE
-    # =====================================================
-
-    st.session_state.messages.append(
+    st.session_state.chat_history.append(
         {
             "role": "user",
             "content": question
         }
     )
 
-    # =====================================================
-    # SHOW USER
-    # =====================================================
-
     with st.chat_message("user"):
 
-        st.markdown(
-            question
-        )
+        st.markdown(question)
 
-    # =====================================================
-    # SIMPLE CONVERSATION
-    # =====================================================
+    # Assistant
 
-    simple_answer = simple_chat_answer(
-        question
-    )
+    with st.chat_message("assistant"):
 
-    if simple_answer:
+        with st.spinner("Thinking..."):
 
-        answer = simple_answer
-
-        with st.chat_message("assistant"):
-
-            st.markdown(
-                answer
-            )
-
-        st.session_state.messages.append(
-            {
-                "role": "assistant",
-                "content": answer
-            }
-        )
-
-        st.stop()
-
-    # =====================================================
-    # NLP
-    # =====================================================
-
-    processed_question = clean_text(
-        question
-    )
-
-    # =====================================================
-    # ML INTENT
-    # =====================================================
-
-    intent, confidence = predict_intent(
-        processed_question
-    )
-
-    # =====================================================
-    # DOCUMENT SEARCH
-    # =====================================================
-
-    document_results = search_documents(
-        question,
-        top_k=5
-    )
-
-    # =====================================================
-    # CONTEXT
-    # =====================================================
-
-    context_parts = []
-
-    source_list = []
-
-    # =====================================================
-    # DOCUMENT CONTEXT
-    # =====================================================
-
-    for result in document_results:
-
-        context_parts.append(
-            f"""
-SOURCE TYPE: Uploaded Document
-SOURCE: {result['source']}
-
-CONTENT:
-{result['text']}
-"""
-        )
-
-        source_list.append(
-            f"📄 {result['source']} "
-            f"• Relevance: "
-            f"{result['score']:.2f}"
-        )
-
-    # =====================================================
-    # EXTERNAL SEARCH
-    # =====================================================
-
-    web_results = []
-
-    # Search Wikipedia only when:
-    # 1. No document result
-    # 2. Document relevance is weak
-
-    if external_search:
-
-        should_search_web = False
-
-        if not document_results:
-
-            should_search_web = True
-
-        elif document_results[0]["score"] < 0.45:
-
-            should_search_web = True
-
-        if should_search_web:
-
-            web_results = wikipedia_search(
+            answer, source, score = generate_answer(
                 question
             )
 
-    # =====================================================
-    # WIKIPEDIA CONTEXT
-    # =====================================================
+        st.markdown(answer)
 
-    for result in web_results:
-
-        context_parts.append(
-            f"""
-SOURCE TYPE: Wikipedia
-SOURCE: {result['title']}
-
-CONTENT:
-{result['text']}
-"""
+        st.caption(
+            f"Source: {source} | Similarity: {score:.2f}"
         )
 
-        source_list.append(
-            f"🌐 {result['title']}"
-        )
-
-    # =====================================================
-    # FINAL CONTEXT
-    # =====================================================
-
-    context = "\n\n".join(
-        context_parts
-    )
-
-    # =====================================================
-    # GEMINI ANSWER
-    # =====================================================
-
-    answer = generate_ai_answer(
-        question,
-        context,
-        intent
-    )
-
-    # =====================================================
-    # ASSISTANT
-    # =====================================================
-
-    with st.chat_message(
-        "assistant"
-    ):
-
-        st.markdown(
-            answer
-        )
-
-        # =================================================
-        # AI ANALYSIS
-        # =================================================
-
-        with st.expander(
-            "🔍 AI Analysis"
-        ):
-
-            st.write(
-                f"**Detected Topic:** {intent}"
-            )
-
-            st.write(
-                f"**ML Confidence:** "
-                f"{confidence:.2%}"
-            )
-
-            if document_results:
-
-                st.write(
-                    "**Knowledge Source:** "
-                    "Uploaded Documents"
-                )
-
-            if web_results:
-
-                st.write(
-                    "**External Source:** "
-                    "Wikipedia"
-                )
-
-            if (
-                not document_results
-                and not web_results
-            ):
-
-                st.write(
-                    "**Knowledge Source:** "
-                    "Gemini General Knowledge"
-                )
-
-        # =================================================
-        # SOURCES
-        # =================================================
-
-        if source_list:
-
-            st.markdown(
-                "### 📚 Sources"
-            )
-
-            for source in source_list:
-
-                st.markdown(
-                    f"""
-                    <div class="source">
-                    {source}
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-
-    # =====================================================
-    # SAVE ANSWER
-    # =====================================================
-
-    st.session_state.messages.append(
+    st.session_state.chat_history.append(
         {
             "role": "assistant",
-            "content": answer
+            "content": answer,
+            "source": source
         }
     )
-
-
-# =========================================================
-# FOOTER
-# =========================================================
-
-st.markdown(
-    """
-    <hr>
-
-    <center>
-
-    <b>🧠 IntelliMind AI</b>
-
-    <br>
-
-    NLP • Machine Learning • Deep Learning •
-    RAG • Generative AI
-
-    <br><br>
-
-    Built as an NLP & AI academic project.
-
-    </center>
-    """,
-    unsafe_allow_html=True
-)
