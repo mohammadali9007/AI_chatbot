@@ -9,9 +9,9 @@ from google import genai
 from google.genai import types
 
 
-# =========================
+# =========================================================
 # APP CONFIG
-# =========================
+# =========================================================
 
 st.set_page_config(
     page_title="IntelliMind AI",
@@ -20,48 +20,49 @@ st.set_page_config(
 )
 
 st.title("🤖 IntelliMind AI")
-st.write("Upload a TXT file and ask questions from it.")
+st.write("Ask questions from your uploaded TXT knowledge file.")
 
 
-# =========================
+# =========================================================
 # SETTINGS
-# =========================
+# =========================================================
 
-MIN_SIMILARITY = 0.10
-TOP_K = 3
+MIN_SCORE = 0.08
+TOP_RESULTS = 5
 
 
-# =========================
+# =========================================================
 # SESSION STATE
-# =========================
+# =========================================================
 
-if "text" not in st.session_state:
-    st.session_state.text = ""
+defaults = {
+    "text": "",
+    "sentences": [],
+    "word_vectorizer": None,
+    "word_matrix": None,
+    "char_vectorizer": None,
+    "char_matrix": None,
+    "filename": "",
+    "chat_history": []
+}
 
-if "chunks" not in st.session_state:
-    st.session_state.chunks = []
+for key, value in defaults.items():
 
-if "vectorizer" not in st.session_state:
-    st.session_state.vectorizer = None
-
-if "matrix" not in st.session_state:
-    st.session_state.matrix = None
-
-if "filename" not in st.session_state:
-    st.session_state.filename = ""
+    if key not in st.session_state:
+        st.session_state[key] = value
 
 
-# =========================
+# =========================================================
 # GEMINI
-# =========================
+# =========================================================
 
-def get_gemini():
+def get_gemini_client():
 
     api_key = None
 
     try:
         api_key = st.secrets.get("GEMINI_API_KEY")
-    except:
+    except Exception:
         pass
 
     if not api_key:
@@ -72,150 +73,380 @@ def get_gemini():
 
     try:
         return genai.Client(api_key=api_key)
-    except:
+
+    except Exception:
         return None
 
 
-# =========================
-# CLEAN TEXT
-# =========================
+# =========================================================
+# TEXT CLEANING
+# =========================================================
 
 def clean_text(text):
 
-    text = text.replace("\x00", "")
+    if not text:
+        return ""
 
-    # Remove extra spaces
+    text = text.replace("\x00", " ")
+
+    # Normalize line breaks
+    text = text.replace("\r\n", "\n")
+    text = text.replace("\r", "\n")
+
+    # Remove excessive spaces
     text = re.sub(r"[ \t]+", " ", text)
 
-    # Remove too many empty lines
+    # Remove excessive blank lines
     text = re.sub(r"\n\s*\n+", "\n\n", text)
 
     return text.strip()
 
 
-# =========================
-# CREATE CHUNKS
-# =========================
+# =========================================================
+# CREATE SENTENCES
+# =========================================================
 
-def create_chunks(text, chunk_size=700):
+def create_sentences(text):
 
-    words = text.split()
+    text = clean_text(text)
 
-    chunks = []
+    if not text:
+        return []
 
-    for i in range(0, len(words), chunk_size):
+    # Split on English punctuation and Bangla danda
+    parts = re.split(
+        r"(?<=[.!?।])\s+|\n+",
+        text
+    )
 
-        chunk = " ".join(words[i:i + chunk_size])
+    sentences = []
 
-        if chunk.strip():
-            chunks.append(chunk.strip())
+    for part in parts:
 
-    return chunks
+        part = part.strip()
+
+        if len(part) >= 5:
+            sentences.append(part)
+
+    return sentences
 
 
-# =========================
+# =========================================================
 # BUILD KNOWLEDGE BASE
-# =========================
+# =========================================================
 
 def build_knowledge_base(text):
 
     text = clean_text(text)
 
-    chunks = create_chunks(text)
+    sentences = create_sentences(text)
 
-    if not chunks:
+    if not sentences:
         return False
 
-    vectorizer = TfidfVectorizer(
+    # -----------------------------------------
+    # WORD TF-IDF
+    # -----------------------------------------
+
+    word_vectorizer = TfidfVectorizer(
         lowercase=True,
         ngram_range=(1, 2),
-        stop_words="english"
+        sublinear_tf=True,
+        max_features=20000
     )
 
-    matrix = vectorizer.fit_transform(chunks)
+    word_matrix = word_vectorizer.fit_transform(
+        sentences
+    )
+
+    # -----------------------------------------
+    # CHARACTER TF-IDF
+    # Helps with Bangla / spelling variations
+    # -----------------------------------------
+
+    char_vectorizer = TfidfVectorizer(
+        analyzer="char_wb",
+        ngram_range=(3, 5),
+        sublinear_tf=True,
+        max_features=30000
+    )
+
+    char_matrix = char_vectorizer.fit_transform(
+        sentences
+    )
 
     st.session_state.text = text
-    st.session_state.chunks = chunks
-    st.session_state.vectorizer = vectorizer
-    st.session_state.matrix = matrix
+    st.session_state.sentences = sentences
+
+    st.session_state.word_vectorizer = word_vectorizer
+    st.session_state.word_matrix = word_matrix
+
+    st.session_state.char_vectorizer = char_vectorizer
+    st.session_state.char_matrix = char_matrix
 
     return True
 
 
-# =========================
+# =========================================================
+# NORMALIZE QUESTION
+# =========================================================
+
+def normalize_text(text):
+
+    text = text.lower()
+
+    # Keep Unicode letters/numbers
+    text = re.sub(r"[^\w\s]", " ", text)
+
+    text = re.sub(r"\s+", " ", text)
+
+    return text.strip()
+
+
+# =========================================================
+# GET QUESTION KEYWORDS
+# =========================================================
+
+def get_keywords(question):
+
+    question = normalize_text(question)
+
+    words = question.split()
+
+    # Common question words
+    stop_words = {
+        "what",
+        "is",
+        "are",
+        "the",
+        "a",
+        "an",
+        "of",
+        "in",
+        "on",
+        "to",
+        "for",
+        "and",
+        "or",
+        "who",
+        "when",
+        "where",
+        "why",
+        "how",
+        "can",
+        "could",
+        "would",
+        "does",
+        "do",
+        "did",
+        "tell",
+        "me",
+        "about",
+
+        # Bangla
+        "কি",
+        "কী",
+        "কে",
+        "কেন",
+        "কখন",
+        "কোথায়",
+        "কোথায়",
+        "কিভাবে",
+        "কীভাবে",
+        "সম্পর্কে",
+        "বল",
+        "বলুন",
+        "হলো",
+        "হয়",
+        "হয়"
+    }
+
+    keywords = []
+
+    for word in words:
+
+        if word not in stop_words and len(word) > 1:
+
+            keywords.append(word)
+
+    return keywords
+
+
+# =========================================================
 # SEARCH TXT
-# =========================
+# =========================================================
 
 def search_txt(question):
 
-    if not st.session_state.chunks:
+    sentences = st.session_state.sentences
+
+    if not sentences:
         return []
 
-    vectorizer = st.session_state.vectorizer
-    matrix = st.session_state.matrix
+    # -----------------------------------------
+    # WORD SIMILARITY
+    # -----------------------------------------
 
-    question_vector = vectorizer.transform([question])
+    word_vectorizer = st.session_state.word_vectorizer
+    word_matrix = st.session_state.word_matrix
 
-    scores = cosine_similarity(
-        question_vector,
-        matrix
+    q_word = word_vectorizer.transform(
+        [question]
+    )
+
+    word_scores = cosine_similarity(
+        q_word,
+        word_matrix
     )[0]
 
+    # -----------------------------------------
+    # CHARACTER SIMILARITY
+    # -----------------------------------------
+
+    char_vectorizer = st.session_state.char_vectorizer
+    char_matrix = st.session_state.char_matrix
+
+    q_char = char_vectorizer.transform(
+        [question]
+    )
+
+    char_scores = cosine_similarity(
+        q_char,
+        char_matrix
+    )[0]
+
+    # -----------------------------------------
+    # KEYWORD MATCH
+    # -----------------------------------------
+
+    keywords = get_keywords(question)
+
+    final_results = []
+
+    for i, sentence in enumerate(sentences):
+
+        normalized_sentence = normalize_text(
+            sentence
+        )
+
+        keyword_matches = 0
+
+        for keyword in keywords:
+
+            if keyword in normalized_sentence:
+                keyword_matches += 1
+
+        if keywords:
+
+            keyword_score = (
+                keyword_matches / len(keywords)
+            )
+
+        else:
+
+            keyword_score = 0
+
+        # -----------------------------------------
+        # COMBINE SCORES
+        # -----------------------------------------
+
+        final_score = (
+            (word_scores[i] * 0.50)
+            +
+            (char_scores[i] * 0.25)
+            +
+            (keyword_score * 0.25)
+        )
+
+        final_results.append({
+            "text": sentence,
+            "score": float(final_score),
+            "word_score": float(word_scores[i]),
+            "char_score": float(char_scores[i]),
+            "keyword_score": float(keyword_score)
+        })
+
+    # Sort highest score first
+    final_results.sort(
+        key=lambda x: x["score"],
+        reverse=True
+    )
+
+    # Only return relevant results
     results = []
 
-    for index in scores.argsort()[::-1][:TOP_K]:
+    for result in final_results[:TOP_RESULTS]:
 
-        score = float(scores[index])
+        if result["score"] >= MIN_SCORE:
 
-        if score >= MIN_SIMILARITY:
-
-            results.append({
-                "text": st.session_state.chunks[index],
-                "score": score
-            })
+            results.append(result)
 
     return results
 
 
-# =========================
-# GEMINI ANSWER
-# =========================
+# =========================================================
+# GET CONTEXT
+# =========================================================
+
+def get_context(results):
+
+    if not results:
+        return ""
+
+    context = []
+
+    for result in results:
+
+        context.append(
+            result["text"]
+        )
+
+    return "\n".join(context)
+
+
+# =========================================================
+# GEMINI NATURAL ANSWER
+# =========================================================
 
 def generate_gemini_answer(question, context):
 
-    client = get_gemini()
+    client = get_gemini_client()
 
     if client is None:
         return None
 
     prompt = f"""
-You are a helpful AI assistant.
+You are IntelliMind AI.
 
 The user uploaded a TXT knowledge file.
 
-Answer the user's question using the information from the TXT file.
+Your job is to answer the user's question using ONLY the
+information provided from the TXT file.
 
-Important rules:
-
-1. Use the provided TXT information.
-2. Do not invent information.
-3. Do not copy unnecessary large parts of the TXT.
-4. Understand the question first.
-5. Give a direct and natural answer.
-6. If the answer has steps, use numbered steps.
-7. If the user asks a simple question, give a short answer.
-8. If the user writes Bangla or Banglish, answer in Bangla/Banglish.
-9. If the answer is not available in the provided text, say that clearly.
-
-TXT INFORMATION:
-----------------
+TXT CONTENT:
+-------------------------
 {context}
-----------------
+-------------------------
 
 USER QUESTION:
 {question}
 
-Now answer the question naturally.
+RULES:
+
+1. Answer the actual question directly.
+2. Do not copy the entire TXT.
+3. Use your own natural wording.
+4. Do not invent information.
+5. If the TXT contains the answer, use it.
+6. If the TXT does not contain enough information, say:
+   "This information is not available in the uploaded TXT file."
+7. For simple questions, give a short answer.
+8. For difficult questions, explain step by step.
+9. If the question is in Bangla or Banglish, answer in Bangla/Banglish.
+10. Do not mention TF-IDF, similarity, chunks, retrieval,
+    context or internal processing.
+
+Give ONLY the final answer.
 """
 
     try:
@@ -228,111 +459,96 @@ Now answer the question naturally.
             )
         )
 
-        if response.text:
+        if response and response.text:
+
             return response.text.strip()
 
     except Exception:
+
         return None
 
     return None
 
 
-# =========================
-# LOCAL TXT ANSWER
-# =========================
+# =========================================================
+# LOCAL ANSWER
+# =========================================================
 
 def local_answer(question, results):
 
     if not results:
         return None
 
-    question_words = set(
-        re.findall(
-            r"\b[a-zA-Z0-9]+\b",
-            question.lower()
-        )
-    )
+    # -----------------------------------------
+    # Best result
+    # -----------------------------------------
 
-    candidates = []
+    best = results[0]
+
+    # If strong match, use best sentence
+    if best["score"] >= 0.30:
+
+        return best["text"]
+
+    # -----------------------------------------
+    # Multiple related sentences
+    # -----------------------------------------
+
+    good_results = []
 
     for result in results:
 
-        text = result["text"]
+        if result["score"] >= 0.15:
 
-        sentences = re.split(
-            r"(?<=[.!?])\s+",
-            text
-        )
-
-        for sentence in sentences:
-
-            sentence_words = set(
-                re.findall(
-                    r"\b[a-zA-Z0-9]+\b",
-                    sentence.lower()
-                )
+            good_results.append(
+                result["text"]
             )
 
-            overlap = len(
-                question_words.intersection(sentence_words)
-            )
+    if good_results:
 
-            if overlap > 0:
+        # Remove duplicates
+        unique = []
 
-                candidates.append(
-                    (overlap, sentence.strip())
-                )
+        for sentence in good_results:
 
-    candidates.sort(
-        key=lambda x: x[0],
-        reverse=True
-    )
+            if sentence not in unique:
 
-    if candidates:
+                unique.append(sentence)
 
-        answer_sentences = []
+        return " ".join(unique[:3])
 
-        for _, sentence in candidates[:5]:
-
-            if sentence not in answer_sentences:
-                answer_sentences.append(sentence)
-
-        return " ".join(answer_sentences)
-
-    # If no sentence matched exactly,
-    # return relevant chunk
-    return results[0]["text"]
+    # Weak result
+    return None
 
 
-# =========================
-# FINAL ANSWER
-# =========================
+# =========================================================
+# FINAL QUESTION ANSWER
+# =========================================================
 
 def answer_question(question):
 
     results = search_txt(question)
 
+    # No relevant information
     if not results:
 
         return (
-            "❌ এই প্রশ্নের উত্তর TXT file-এর মধ্যে পাওয়া যায়নি।"
+            "❌ এই প্রশ্নের উত্তর uploaded TXT file-এর মধ্যে "
+            "পাওয়া যায়নি।"
         ), "TXT File"
 
-    # Combine relevant TXT parts
-    context_parts = []
+    # -----------------------------------------
+    # Build small context
+    # -----------------------------------------
 
-    for result in results:
+    context = get_context(results)
 
-        context_parts.append(
-            result["text"]
-        )
+    context = context[:7000]
 
-    context = "\n\n".join(context_parts)
-
-    # Limit context
-    context = context[:6000]
-
+    # -----------------------------------------
     # Try Gemini
+    # -----------------------------------------
+
     ai_answer = generate_gemini_answer(
         question,
         context
@@ -340,27 +556,38 @@ def answer_question(question):
 
     if ai_answer:
 
-        return ai_answer, "TXT + Gemini"
+        return ai_answer, "📚 TXT + Gemini"
 
-    # Gemini unavailable/quota exceeded
+    # -----------------------------------------
+    # Gemini unavailable
+    # Use local TXT answer
+    # -----------------------------------------
+
     local = local_answer(
         question,
         results
     )
 
-    return local, "TXT File"
+    if local:
+
+        return local, "📄 TXT File"
+
+    return (
+        "❌ এই প্রশ্নের জন্য TXT file-এ "
+        "যথেষ্ট তথ্য পাওয়া যায়নি।"
+    ), "TXT File"
 
 
-# =========================
+# =========================================================
 # SIDEBAR
-# =========================
+# =========================================================
 
 with st.sidebar:
 
     st.header("📁 Knowledge Base")
 
     uploaded_file = st.file_uploader(
-        "Upload TXT file",
+        "Upload TXT File",
         type=["txt"]
     )
 
@@ -373,66 +600,145 @@ with st.sidebar:
 
             try:
 
-                file_text = uploaded_file.read().decode(
-                    "utf-8"
-                )
+                file_bytes = uploaded_file.read()
 
-            except:
+                try:
 
-                file_text = uploaded_file.read().decode(
-                    "latin-1"
-                )
+                    file_text = file_bytes.decode(
+                        "utf-8"
+                    )
 
-            if build_knowledge_base(file_text):
+                except UnicodeDecodeError:
 
-                st.session_state.filename = (
-                    uploaded_file.name
-                )
+                    file_text = file_bytes.decode(
+                        "latin-1"
+                    )
 
-                st.success(
-                    "Knowledge Base Ready! ✅"
-                )
+                if build_knowledge_base(
+                    file_text
+                ):
 
-                st.info(
-                    f"File: {uploaded_file.name}"
-                )
+                    st.session_state.filename = (
+                        uploaded_file.name
+                    )
 
-            else:
+                    st.session_state.chat_history = []
+
+                    st.success(
+                        "Knowledge Base Ready! ✅"
+                    )
+
+                    st.info(
+                        f"📄 {uploaded_file.name}"
+                    )
+
+                    st.info(
+                        f"📝 {len(st.session_state.sentences)} "
+                        f"sentences indexed"
+                    )
+
+                else:
+
+                    st.error(
+                        "TXT file is empty."
+                    )
+
+            except Exception as e:
 
                 st.error(
-                    "TXT file is empty."
+                    f"File processing error: {e}"
                 )
 
 
-# =========================
-# STATUS
-# =========================
+    # -----------------------------------------
+    # STATUS
+    # -----------------------------------------
 
-if st.session_state.chunks:
+    st.divider()
+
+    st.subheader("⚙️ System Status")
+
+    if st.session_state.sentences:
+
+        st.success("🟢 Knowledge Base Active")
+
+        st.write(
+            f"📄 File: "
+            f"{st.session_state.filename}"
+        )
+
+        st.write(
+            f"📝 Sentences: "
+            f"{len(st.session_state.sentences)}"
+        )
+
+    else:
+
+        st.warning(
+            "🟡 No TXT file loaded"
+        )
+
+
+    # -----------------------------------------
+    # CLEAR CHAT
+    # -----------------------------------------
+
+    if st.button(
+        "🗑️ Clear Chat",
+        use_container_width=True
+    ):
+
+        st.session_state.chat_history = []
+
+        st.rerun()
+
+
+# =========================================================
+# MAIN STATUS
+# =========================================================
+
+if st.session_state.sentences:
 
     st.success(
-        f"📚 Knowledge Base Active: "
+        f"📚 Ready to answer from: "
         f"{st.session_state.filename}"
-    )
-
-    st.write(
-        f"Total sections: "
-        f"{len(st.session_state.chunks)}"
     )
 
 else:
 
     st.info(
-        "👈 First upload a TXT file and "
-        "click 'Build Knowledge Base'."
+        "👈 Upload your TXT file from the sidebar "
+        "and click Build Knowledge Base."
     )
 
 
-# =========================
-# CHAT
-# =========================
+# =========================================================
+# CHAT HISTORY
+# =========================================================
 
-st.divider()
+for message in st.session_state.chat_history:
+
+    with st.chat_message(
+        message["role"]
+    ):
+
+        st.write(
+            message["content"]
+        )
+
+        if message["role"] == "assistant":
+
+            st.caption(
+                message.get(
+                    "source",
+                    ""
+                )
+            )
+
+
+# =========================================================
+# CHAT INPUT
+# =========================================================
 
 question = st.chat_input(
     "Ask a question from your TXT file..."
@@ -441,28 +747,44 @@ question = st.chat_input(
 
 if question:
 
-    if not st.session_state.chunks:
+    # -----------------------------------------
+    # User message
+    # -----------------------------------------
 
-        st.warning(
-            "Please upload and build a TXT Knowledge Base first."
+    st.session_state.chat_history.append({
+        "role": "user",
+        "content": question
+    })
+
+    with st.chat_message("user"):
+
+        st.write(question)
+
+
+    # -----------------------------------------
+    # Assistant
+    # -----------------------------------------
+
+    with st.chat_message("assistant"):
+
+        with st.spinner(
+            "Searching your TXT file..."
+        ):
+
+            answer, source = answer_question(
+                question
+            )
+
+        st.write(answer)
+
+        st.caption(
+            f"📌 Source: {source}"
         )
 
-    else:
 
-        with st.chat_message("user"):
-
-            st.write(question)
-
-        with st.chat_message("assistant"):
-
-            with st.spinner("Thinking..."):
-
-                answer, source = answer_question(
-                    question
-                )
-
-            st.write(answer)
-
-            st.caption(
-                f"📌 Source: {source}"
-            )
+    # Save answer
+    st.session_state.chat_history.append({
+        "role": "assistant",
+        "content": answer,
+        "source": f"📌 Source: {source}"
+    })
