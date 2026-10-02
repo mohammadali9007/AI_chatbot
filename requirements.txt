@@ -1,8 +1,7 @@
 streamlit
-google-genai
-sentence-transformers
-scikit-learn
-numpy
 requests
+numpy
 pypdf
-torch
+scikit-learn
+sentence-transformers
+google-genai
