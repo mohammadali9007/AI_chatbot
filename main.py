@@ -1,192 +1,158 @@
 import os
 import re
-import time
-
 import streamlit as st
-from pypdf import PdfReader
 
+from pypdf import PdfReader
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-
 from google import genai
 
 
-# ============================================================
-# 1. CONFIGURATION
-# ============================================================
+# =========================================================
+# CONFIG
+# =========================================================
 
 APP_NAME = "IntelliMind AI"
 
-# ============================================================
-# GEMINI MODEL FALLBACK SYSTEM
-# ============================================================
+MODEL_NAME = "gemini-3.8-flash"
 
-MODEL_NAMES = [
-    "gemini-3.8-flash",
-    "gemini-3.7-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
-    "gemini-3.5-flash-lite",
-]
+# Only one fallback to reduce waiting time
+FALLBACK_MODEL = None
 
-# Text chunk settings
 CHUNK_SIZE = 900
 CHUNK_OVERLAP = 150
 
-# Retrieval settings
-TOP_K = 5
-MIN_SIMILARITY = 0.25
+# Faster retrieval
+TOP_K = 3
+MIN_SIMILARITY = 0.20
+
+# Limit context sent to Gemini
+MAX_CONTEXT_CHARS = 5000
 
 
-# ============================================================
-# 2. PAGE CONFIG
-# ============================================================
+# =========================================================
+# PAGE CONFIG
+# =========================================================
 
 st.set_page_config(
     page_title=APP_NAME,
-    page_icon="🧠",
+    page_icon="🤖",
     layout="wide"
 )
 
 
-# ============================================================
-# 3. CUSTOM CSS
-# ============================================================
+# =========================================================
+# CSS
+# =========================================================
 
-st.markdown(
-    """
-    <style>
+st.markdown("""
+<style>
 
-    .main-title {
-        text-align: center;
-        font-size: 45px;
-        font-weight: 800;
-        margin-bottom: 5px;
-    }
+.main-title {
+    font-size: 42px;
+    font-weight: 800;
+    margin-bottom: 0;
+}
 
-    .subtitle {
-        text-align: center;
-        color: #777;
-        font-size: 18px;
-        margin-bottom: 30px;
-    }
+.subtitle {
+    color: #777;
+    font-size: 17px;
+    margin-bottom: 25px;
+}
 
-    .source-card {
-        padding: 12px;
-        border-radius: 10px;
-        background: rgba(100,100,100,0.08);
-        margin-top: 8px;
-    }
+.card {
+    padding: 18px;
+    border-radius: 14px;
+    border: 1px solid rgba(128,128,128,0.25);
+    margin-bottom: 15px;
+}
 
-    </style>
-    """,
-    unsafe_allow_html=True
-)
+.source-box {
+    padding: 10px;
+    border-radius: 10px;
+    background: rgba(128,128,128,0.08);
+    font-size: 13px;
+}
 
-
-# ============================================================
-# 4. SESSION STATE
-# ============================================================
-
-if "chunks" not in st.session_state:
-    st.session_state.chunks = []
-
-if "documents" not in st.session_state:
-    st.session_state.documents = []
-
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-
-if "document_summary" not in st.session_state:
-    st.session_state.document_summary = ""
-
-if "suggested_questions" not in st.session_state:
-    st.session_state.suggested_questions = []
+</style>
+""", unsafe_allow_html=True)
 
 
-# ============================================================
-# 5. GEMINI CLIENT
-# ============================================================
+# =========================================================
+# SESSION STATE
+# =========================================================
 
+defaults = {
+    "chunks": [],
+    "documents": [],
+    "chat_history": [],
+    "document_summary": "",
+    "suggested_questions": [],
+
+    # IMPORTANT:
+    # TF-IDF objects are stored after building KB
+    "vectorizer": None,
+    "tfidf_matrix": None,
+
+    "kb_ready": False,
+}
+
+for key, value in defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
+
+
+# =========================================================
+# GEMINI CLIENT
+# =========================================================
+
+@st.cache_resource
 def get_gemini_client():
 
     api_key = None
 
-    # --------------------------------------------------------
-    # Streamlit Cloud Secrets
-    # --------------------------------------------------------
-
     try:
-        api_key = st.secrets.get("GEMINI_API_KEY")
+        api_key = st.secrets["GEMINI_API_KEY"]
     except Exception:
         pass
-
-    # --------------------------------------------------------
-    # Local environment variable
-    # --------------------------------------------------------
 
     if not api_key:
         api_key = os.getenv("GEMINI_API_KEY")
 
-    # --------------------------------------------------------
-    # No API key
-    # --------------------------------------------------------
-
     if not api_key:
         return None
 
-    # --------------------------------------------------------
-    # Create Gemini client
-    # --------------------------------------------------------
-
     try:
-
-        return genai.Client(
-            api_key=api_key
-        )
-
-    except Exception as e:
-
-        st.error(
-            f"Gemini client error: {e}"
-        )
-
+        return genai.Client(api_key=api_key)
+    except Exception:
         return None
 
 
-client = get_gemini_client()
-
-
-# ============================================================
-# 6. TEXT CLEANING
-# ============================================================
+# =========================================================
+# TEXT CLEANING
+# =========================================================
 
 def clean_text(text):
 
     if not text:
         return ""
 
-    # Remove null characters
-    text = text.replace(
-        "\x00",
-        " "
-    )
+    text = text.replace("\x00", " ")
 
-    # Normalize spaces
-    text = re.sub(
-        r"\s+",
-        " ",
-        text
-    )
+    # Remove multiple spaces
+    text = re.sub(r"\s+", " ", text)
+
+    # Remove excessive punctuation spacing
+    text = re.sub(r"\s+([,.!?;:])", r"\1", text)
 
     return text.strip()
 
 
-# ============================================================
-# 7. TEXT CHUNKING
-# ============================================================
+# =========================================================
+# CREATE CHUNKS
+# =========================================================
 
-def create_chunks(text):
+def create_chunks(text, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP):
 
     text = clean_text(text)
 
@@ -196,850 +162,530 @@ def create_chunks(text):
     chunks = []
 
     start = 0
+    text_length = len(text)
 
-    while start < len(text):
+    while start < text_length:
 
-        end = min(
-            start + CHUNK_SIZE,
-            len(text)
-        )
+        end = start + chunk_size
 
-        chunk = text[start:end]
+        chunk = text[start:end].strip()
 
-        # ----------------------------------------------------
-        # Try to end at sentence
-        # ----------------------------------------------------
+        if chunk:
+            chunks.append(chunk)
 
-        if end < len(text):
+        if end >= text_length:
+            break
 
-            possible_breaks = [
-                chunk.rfind("."),
-                chunk.rfind("?"),
-                chunk.rfind("!"),
-            ]
-
-            best_break = max(
-                possible_breaks
-            )
-
-            if best_break > CHUNK_SIZE * 0.55:
-
-                chunk = chunk[
-                    :best_break + 1
-                ]
-
-                end = start + len(chunk)
-
-        # ----------------------------------------------------
-        # Save valid chunk
-        # ----------------------------------------------------
-
-        if len(chunk.strip()) > 40:
-
-            chunks.append(
-                chunk.strip()
-            )
-
-        # ----------------------------------------------------
-        # Move forward
-        # ----------------------------------------------------
-
-        next_start = end - CHUNK_OVERLAP
-
-        if next_start <= start:
-            next_start = end
-
-        start = next_start
+        start = end - overlap
 
     return chunks
 
 
-# ============================================================
-# 8. READ TXT
-# ============================================================
+# =========================================================
+# READ TXT
+# =========================================================
 
-def read_txt(file):
+def read_txt(uploaded_file):
 
     try:
 
-        raw = file.read()
+        raw = uploaded_file.read()
 
-        text = raw.decode(
-            "utf-8",
-            errors="ignore"
-        )
+        try:
+            text = raw.decode("utf-8")
+
+        except UnicodeDecodeError:
+            text = raw.decode("latin-1")
 
         return clean_text(text)
 
     except Exception as e:
 
-        st.error(
-            f"TXT reading error: {e}"
-        )
+        st.error(f"TXT reading error: {e}")
 
         return ""
 
 
-# ============================================================
-# 9. READ PDF
-# ============================================================
+# =========================================================
+# READ PDF
+# =========================================================
 
-def read_pdf(file):
+def read_pdf(uploaded_file):
+
+    text_parts = []
 
     try:
 
-        reader = PdfReader(file)
+        reader = PdfReader(uploaded_file)
 
-        pages = []
-
-        for page_number, page in enumerate(
-            reader.pages,
-            start=1
-        ):
+        for page in reader.pages:
 
             try:
-
                 page_text = page.extract_text()
 
+                if page_text:
+                    text_parts.append(page_text)
+
             except Exception:
+                continue
 
-                page_text = ""
-
-            if page_text:
-
-                pages.append(
-                    f"[Page {page_number}] "
-                    f"{page_text}"
-                )
-
-        return clean_text(
-            "\n".join(pages)
-        )
+        return clean_text("\n".join(text_parts))
 
     except Exception as e:
 
-        st.error(
-            f"PDF reading error: {e}"
-        )
+        st.error(f"PDF reading error: {e}")
 
         return ""
 
 
-# ============================================================
-# 10. PROCESS FILE
-# ============================================================
+# =========================================================
+# PROCESS FILE
+# =========================================================
 
-def process_file(file):
+def process_file(uploaded_file):
 
-    filename = file.name.lower()
+    file_name = uploaded_file.name.lower()
 
-    # --------------------------------------------------------
-    # TXT
-    # --------------------------------------------------------
+    if file_name.endswith(".txt"):
 
-    if filename.endswith(".txt"):
+        text = read_txt(uploaded_file)
 
-        text = read_txt(file)
+    elif file_name.endswith(".pdf"):
 
-    # --------------------------------------------------------
-    # PDF
-    # --------------------------------------------------------
-
-    elif filename.endswith(".pdf"):
-
-        text = read_pdf(file)
+        text = read_pdf(uploaded_file)
 
     else:
 
         return []
 
-    # --------------------------------------------------------
-    # Empty file
-    # --------------------------------------------------------
-
     if not text:
-
         return []
 
-    # --------------------------------------------------------
-    # Create chunks
-    # --------------------------------------------------------
-
-    chunks = create_chunks(text)
-
-    result = []
-
-    for index, chunk in enumerate(
-        chunks,
-        start=1
-    ):
-
-        result.append(
-            {
-                "text": chunk,
-                "source": file.name,
-                "chunk_id": index
-            }
-        )
-
-    return result
+    return create_chunks(text)
 
 
-# ============================================================
-# 11. RETRIEVE KNOWLEDGE
-# ============================================================
+# =========================================================
+# BUILD TF-IDF INDEX
+# =========================================================
 
-def retrieve_knowledge(question):
+def build_tfidf_index():
 
     chunks = st.session_state.chunks
 
     if not chunks:
-
-        return [], 0.0
-
-    texts = [
-        item["text"]
-        for item in chunks
-    ]
+        return False
 
     try:
 
         vectorizer = TfidfVectorizer(
             lowercase=True,
-            ngram_range=(1, 2),
-            sublinear_tf=True
+            stop_words="english",
+            max_features=10000
         )
 
-        matrix = vectorizer.fit_transform(
-            texts + [question]
-        )
+        matrix = vectorizer.fit_transform(chunks)
 
-        question_vector = matrix[-1]
+        # SAVE THEM
+        st.session_state.vectorizer = vectorizer
+        st.session_state.tfidf_matrix = matrix
 
-        document_vectors = matrix[:-1]
+        return True
+
+    except Exception as e:
+
+        st.error(f"TF-IDF error: {e}")
+
+        return False
+
+
+# =========================================================
+# RETRIEVE KNOWLEDGE
+# =========================================================
+
+def retrieve_knowledge(question):
+
+    chunks = st.session_state.chunks
+    vectorizer = st.session_state.vectorizer
+    matrix = st.session_state.tfidf_matrix
+
+    if not chunks:
+        return []
+
+    if vectorizer is None or matrix is None:
+        return []
+
+    try:
+
+        # IMPORTANT:
+        # We DO NOT fit TF-IDF again.
+        question_vector = vectorizer.transform([question])
 
         scores = cosine_similarity(
             question_vector,
-            document_vectors
-        )[0]
+            matrix
+        ).flatten()
 
-        ranked_indices = scores.argsort()[::-1]
+        # Get top results
+        top_indices = scores.argsort()[::-1][:TOP_K]
 
         results = []
 
-        for index in ranked_indices[:TOP_K]:
+        for index in top_indices:
 
-            results.append(
-                {
-                    "text": chunks[index]["text"],
-                    "source": chunks[index]["source"],
-                    "chunk_id": chunks[index]["chunk_id"],
-                    "score": float(scores[index])
-                }
-            )
+            score = float(scores[index])
 
-        best_score = (
-            results[0]["score"]
-            if results
-            else 0.0
-        )
+            results.append({
+                "index": int(index),
+                "score": score,
+                "text": chunks[index]
+            })
 
-        return results, best_score
+        return results
 
-    except Exception:
+    except Exception as e:
 
-        return [], 0.0
+        st.error(f"Retrieval error: {e}")
+
+        return []
 
 
-# ============================================================
-# 12. BUILD CONTEXT
-# ============================================================
+# =========================================================
+# BUILD CONTEXT
+# =========================================================
 
 def build_context(results):
 
-    useful_results = [
-        item
-        for item in results
-        if item["score"] >= MIN_SIMILARITY
-    ]
-
-    if not useful_results:
-
+    if not results:
         return ""
 
     context_parts = []
+    total_chars = 0
 
-    for item in useful_results:
+    for item in results:
+
+        score = item["score"]
+
+        if score < MIN_SIMILARITY:
+            continue
+
+        text = item["text"]
+
+        remaining = MAX_CONTEXT_CHARS - total_chars
+
+        if remaining <= 0:
+            break
+
+        text = text[:remaining]
 
         context_parts.append(
-            f"""
-SOURCE: {item['source']}
-CHUNK: {item['chunk_id']}
-RELEVANCE SCORE: {item['score']:.2f}
-
-{item['text']}
-"""
+            f"[Knowledge Chunk | Similarity: {score:.2f}]\n{text}"
         )
 
-    return "\n------------------------\n".join(
-        context_parts
-    )
+        total_chars += len(text)
+
+    return "\n\n".join(context_parts)
 
 
-# ============================================================
-# 13. GEMINI MODEL CALL WITH AUTOMATIC FALLBACK
-# ============================================================
+# =========================================================
+# GEMINI CALL
+# =========================================================
 
-def call_gemini_with_fallback(prompt):
+def call_gemini(prompt):
+
+    client = get_gemini_client()
 
     if client is None:
+        return None, "Gemini API key not configured."
 
-        return (
-            None,
-            "Gemini API is not configured."
-        )
+    models_to_try = [MODEL_NAME]
 
-    errors = []
+    if FALLBACK_MODEL:
+        models_to_try.append(FALLBACK_MODEL)
 
-    # --------------------------------------------------------
-    # Try every model
-    # --------------------------------------------------------
+    last_error = ""
 
-    for model_name in MODEL_NAMES:
+    for model in models_to_try:
 
         try:
 
             response = client.models.generate_content(
-                model=model_name,
+                model=model,
                 contents=prompt
             )
 
-            # ------------------------------------------------
-            # Successful response
-            # ------------------------------------------------
+            if response and response.text:
 
-            if response is not None:
-
-                answer = getattr(
-                    response,
-                    "text",
-                    None
-                )
-
-                if answer:
-
-                    return (
-                        answer.strip(),
-                        model_name
-                    )
-
-            errors.append(
-                f"{model_name}: Empty response"
-            )
+                return response.text.strip(), model
 
         except Exception as e:
 
-            error = str(e)
+            last_error = str(e)
 
-            errors.append(
-                f"{model_name}: {error}"
-            )
-
-            # ------------------------------------------------
-            # 503 = temporary server problem
-            # ------------------------------------------------
-
-            if (
-                "503" in error
-                or "UNAVAILABLE" in error
-            ):
-
-                continue
-
-            # ------------------------------------------------
-            # 429 = rate limit
-            # ------------------------------------------------
-
-            if "429" in error:
-
-                continue
-
-            # ------------------------------------------------
-            # 404 = model unavailable
-            # ------------------------------------------------
-
-            if "404" in error:
-
-                continue
-
-            # ------------------------------------------------
-            # 401 / 403 = API key problem
-            # ------------------------------------------------
-
-            if (
-                "401" in error
-                or "403" in error
-            ):
-
-                # Try next model anyway
-                continue
-
-            # ------------------------------------------------
-            # Other errors
-            # ------------------------------------------------
-
+            # If primary fails and fallback exists,
+            # try only the fallback.
             continue
 
-    # --------------------------------------------------------
-    # All models failed
-    # --------------------------------------------------------
-
-    error_message = (
-        "All Gemini models failed.\n\n"
-        + "\n\n".join(errors)
-    )
-
-    return (
-        None,
-        error_message
-    )
+    return None, last_error
 
 
-# ============================================================
-# 14. ASK GEMINI
-# ============================================================
+# =========================================================
+# ASK GEMINI
+# =========================================================
 
-def ask_gemini(
-    question,
-    context="",
-    mode="Normal"
-):
-
-    # --------------------------------------------------------
-    # Check client
-    # --------------------------------------------------------
-
-    if client is None:
-
-        return (
-            None,
-            "Gemini API is not configured."
-        )
-
-    # --------------------------------------------------------
-    # Mode instructions
-    # --------------------------------------------------------
-
-    if "Student" in mode:
-
-        mode_instruction = """
-Explain the answer using very simple English.
-
-Use:
-- simple explanation
-- simple examples
-- important exam points when useful
-"""
-
-    elif "Research" in mode:
-
-        mode_instruction = """
-Give a research-oriented answer.
-
-Focus on:
-- Objective
-- Methodology
-- Findings
-- Limitations
-- Research implications
-"""
-
-    else:
-
-        mode_instruction = """
-Give a clear and well-structured answer.
-
-Use headings and bullet points when useful.
-"""
-
-    # ========================================================
-    # KNOWLEDGE BASE ANSWER
-    # ========================================================
+def ask_gemini(question, context="", mode="Normal"):
 
     if context:
 
         prompt = f"""
-You are IntelliMind AI,
-an AI-powered Knowledge and Research Assistant.
+You are IntelliMind AI.
+
+Mode: {mode}
+
+Answer the user's question using the knowledge base below.
+
+Rules:
+- Give a direct and useful answer.
+- Prefer the provided knowledge base.
+- If the answer is not available in the knowledge base, clearly say that.
+- Do not invent facts from the knowledge base.
+- Keep the answer concise.
+- Use simple language.
+
+KNOWLEDGE BASE:
+{context}
 
 USER QUESTION:
 {question}
-
-RETRIEVED INFORMATION FROM USER DOCUMENTS:
-{context}
-
-RESPONSE MODE:
-{mode}
-
-IMPORTANT RULES:
-
-1. The uploaded knowledge is the primary source.
-2. Use the retrieved information whenever possible.
-3. Do not invent facts that are not supported by the document.
-4. If the document only partially answers the question,
-   clearly explain what is available and what is missing.
-5. Do not claim something came from the document
-   unless it is actually supported by the retrieved text.
-6. Do not simply copy the entire document.
-7. Answer the user's actual question directly.
-8. Keep the answer clear and easy to understand.
-
-{mode_instruction}
-
-Now answer the user's question.
 """
-
-        source_prefix = "📚 Knowledge Base + Gemini"
-
-    # ========================================================
-    # GENERAL GEMINI ANSWER
-    # ========================================================
 
     else:
 
         prompt = f"""
-You are IntelliMind AI,
-a general-purpose AI assistant.
+You are IntelliMind AI.
+
+Mode: {mode}
+
+Answer this question clearly and accurately.
+
+Keep the answer concise and easy to understand.
 
 USER QUESTION:
 {question}
-
-There is no sufficiently relevant information
-in the uploaded knowledge base.
-
-Answer using your general knowledge.
-
-IMPORTANT RULES:
-
-1. Do not pretend the answer came from uploaded documents.
-2. Give a useful and clear answer.
-3. Do not invent document information.
-4. If information may be uncertain or time-sensitive,
-   mention the limitation.
-5. Keep the answer easy to understand.
-
-{mode_instruction}
-
-Now answer the user's question.
 """
 
-        source_prefix = "🌐 Gemini General AI"
-
-    # ========================================================
-    # CALL GEMINI WITH FALLBACK
-    # ========================================================
-
-    answer, model_used = call_gemini_with_fallback(
-        prompt
-    )
-
-    # --------------------------------------------------------
-    # Success
-    # --------------------------------------------------------
-
-    if answer:
-
-        return (
-            answer,
-            f"{source_prefix} ({model_used})"
-        )
-
-    # --------------------------------------------------------
-    # Failed
-    # --------------------------------------------------------
-
-    return (
-        None,
-        model_used
-    )
+    return call_gemini(prompt)
 
 
-# ============================================================
-# 15. MAIN ANSWER ENGINE
-# ============================================================
+# =========================================================
+# GENERATE ANSWER
+# =========================================================
 
-def generate_answer(
-    question,
-    mode
-):
+def generate_answer(question, mode):
 
-    # --------------------------------------------------------
-    # Retrieve
-    # --------------------------------------------------------
+    results = retrieve_knowledge(question)
 
-    results, best_score = retrieve_knowledge(
-        question
-    )
+    context = build_context(results)
 
-    # --------------------------------------------------------
-    # Build context
-    # --------------------------------------------------------
-
-    context = build_context(
-        results
-    )
-
-    # --------------------------------------------------------
-    # Ask Gemini
-    # --------------------------------------------------------
-
-    answer, source = ask_gemini(
+    answer, model_or_error = ask_gemini(
         question,
         context,
         mode
     )
 
-    # --------------------------------------------------------
-    # Gemini success
-    # --------------------------------------------------------
-
     if answer:
 
-        return (
-            answer,
-            source,
-            best_score,
-            results
-        )
+        if context:
 
-    # --------------------------------------------------------
-    # Knowledge base fallback
-    # --------------------------------------------------------
+            best_score = max(
+                [x["score"] for x in results],
+                default=0
+            )
 
+            return (
+                answer,
+                f"📚 Knowledge Base + Gemini ({model_or_error})",
+                best_score
+            )
+
+        else:
+
+            return (
+                answer,
+                f"🤖 Gemini ({model_or_error})",
+                0
+            )
+
+    # Gemini failed
     if context:
 
-        fallback = f"""
-### ⚠️ Gemini could not generate the final answer
-
-Relevant information was found in your uploaded
-knowledge base.
-
-**Gemini error/details:**
-
-{source}
-
-Please review the retrieved sources below.
-"""
-
-        return (
-            fallback,
-            "📚 Knowledge Base Fallback",
-            best_score,
-            results
+        best_score = max(
+            [x["score"] for x in results],
+            default=0
         )
 
-    # --------------------------------------------------------
-    # Final fallback
-    # --------------------------------------------------------
-
-    fallback = f"""
-### ❌ Gemini could not generate an answer
-
-**Details:**
-
-{source}
-
-Please try again after a few moments.
-"""
+        return (
+            "Gemini is temporarily unavailable. "
+            "However, I found relevant information in your "
+            "knowledge base:\n\n" + context,
+            "📚 Knowledge Base only",
+            best_score
+        )
 
     return (
-        fallback,
-        "⚠️ System Fallback",
-        best_score,
-        results
+        f"⚠️ Gemini error:\n{model_or_error}",
+        "❌ Gemini Error",
+        0
     )
 
 
-# ============================================================
-# 16. TEST GEMINI WITH FALLBACK
-# ============================================================
+# =========================================================
+# TEST GEMINI
+# =========================================================
 
 def test_gemini():
 
-    if client is None:
-
-        return (
-            "❌ Gemini client is not connected."
-        )
-
-    prompt = (
-        "Reply with exactly: "
-        "Gemini connection successful."
-    )
-
-    answer, model_used = call_gemini_with_fallback(
-        prompt
+    answer, info = call_gemini(
+        "Reply with exactly: Gemini connection successful."
     )
 
     if answer:
 
-        return (
-            f"Gemini connection successful.\n"
-            f"Model used: {model_used}"
-        )
+        st.success(f"✅ {answer}")
+        st.caption(f"Model: {info}")
 
-    return (
-        f"❌ Gemini failed.\n\n"
-        f"{model_used}"
-    )
+    else:
+
+        st.error(f"❌ Gemini error: {info}")
 
 
-# ============================================================
-# 17. DOCUMENT SUMMARY
-# ============================================================
+# =========================================================
+# DOCUMENT SUMMARY
+# =========================================================
 
 def generate_summary():
 
-    if not st.session_state.chunks:
+    chunks = st.session_state.chunks
 
-        return "Please upload a document first."
+    if not chunks:
+        return "No knowledge base available."
 
-    if client is None:
+    # Keep summary input small
+    text = "\n\n".join(chunks[:8])
 
-        return "Gemini API is not connected."
-
-    context = "\n\n".join(
-        item["text"]
-        for item in st.session_state.chunks[:20]
-    )
+    text = text[:7000]
 
     prompt = f"""
-You are an AI research assistant.
+Summarize the following document in simple language.
 
-Analyze the following uploaded document content.
+Give:
+1. Main topic
+2. Important points
+3. Key findings
 
-DOCUMENT CONTENT:
+DOCUMENT:
 
-{context}
-
-Create a structured summary with:
-
-1. Title / Topic
-2. Main Objective
-3. Key Concepts
-4. Methodology or Approach
-5. Important Findings
-6. Limitations
-7. Possible Future Work
-8. Short Conclusion
-
-Rules:
-
-- Do not invent information.
-- If something is unavailable,
-  write "Not mentioned".
-- Keep the summary clear and concise.
+{text}
 """
 
-    answer, model_used = call_gemini_with_fallback(
-        prompt
-    )
+    answer, info = call_gemini(prompt)
 
     if answer:
+        return answer
 
-        return (
-            f"{answer}\n\n"
-            f"---\n"
-            f"Model used: `{model_used}`"
-        )
-
-    return (
-        f"❌ Could not generate summary.\n\n"
-        f"{model_used}"
-    )
+    return f"Summary unavailable.\n\nError: {info}"
 
 
-# ============================================================
-# 18. SUGGEST QUESTIONS
-# ============================================================
+# =========================================================
+# SUGGESTED QUESTIONS
+# =========================================================
 
 def generate_questions():
 
-    if not st.session_state.chunks:
+    chunks = st.session_state.chunks
 
+    if not chunks:
         return []
 
-    if client is None:
-
-        return []
-
-    context = "\n\n".join(
-        item["text"]
-        for item in st.session_state.chunks[:10]
-    )
+    text = "\n\n".join(chunks[:5])
+    text = text[:5000]
 
     prompt = f"""
-Based on the following uploaded document:
+Create 5 useful questions from this document.
 
-{context}
+Return only the questions.
+Number them 1 to 5.
 
-Generate 5 useful questions that a
-student or researcher could ask.
+DOCUMENT:
 
-Rules:
-
-- Questions must be related to the document.
-- Keep them meaningful.
-- Return only 5 questions.
-- Number them from 1 to 5.
+{text}
 """
 
-    answer, model_used = call_gemini_with_fallback(
-        prompt
-    )
+    answer, info = call_gemini(prompt)
 
     if not answer:
-
         return []
-
-    lines = answer.split("\n")
 
     questions = []
 
-    for line in lines:
+    for line in answer.splitlines():
+
+        line = line.strip()
 
         line = re.sub(
-            r"^\s*\d+[\.\)]\s*",
+            r"^[0-9]+[\.\)\-\s]+",
             "",
             line
-        ).strip()
+        )
 
-        if len(line) > 10:
-
+        if line:
             questions.append(line)
 
     return questions[:5]
 
 
-# ============================================================
-# 19. SIDEBAR
-# ============================================================
+# =========================================================
+# HEADER
+# =========================================================
+
+st.markdown(
+    '<div class="main-title">🤖 IntelliMind AI</div>',
+    unsafe_allow_html=True
+)
+
+st.markdown(
+    '<div class="subtitle">'
+    'Fast AI Assistant with PDF/TXT Knowledge Base'
+    '</div>',
+    unsafe_allow_html=True
+)
+
+
+# =========================================================
+# SIDEBAR
+# =========================================================
 
 with st.sidebar:
 
-    st.header("🧠 IntelliMind AI")
+    st.header("⚙️ Settings")
 
-    st.subheader("📂 Knowledge Base")
+    mode = st.selectbox(
+        "Response Mode",
+        [
+            "Normal",
+            "Student",
+            "Research"
+        ]
+    )
+
+    st.divider()
+
+    st.subheader("📄 Knowledge Base")
 
     uploaded_files = st.file_uploader(
-        "Upload PDF or TXT files",
+        "Upload PDF or TXT",
         type=["pdf", "txt"],
         accept_multiple_files=True
     )
-
-    # --------------------------------------------------------
-    # Build Knowledge Base
-    # --------------------------------------------------------
 
     if st.button(
         "🚀 Build Knowledge Base",
@@ -1048,122 +694,68 @@ with st.sidebar:
 
         if not uploaded_files:
 
-            st.warning(
-                "Please upload a PDF or TXT file."
-            )
+            st.warning("Please upload a PDF or TXT file.")
 
         else:
 
             all_chunks = []
-            names = []
+            document_names = []
 
             progress = st.progress(0)
 
-            for i, file in enumerate(
-                uploaded_files
-            ):
+            for i, file in enumerate(uploaded_files):
 
                 chunks = process_file(file)
 
                 if chunks:
 
-                    all_chunks.extend(
-                        chunks
-                    )
-
-                    names.append(
-                        file.name
-                    )
+                    all_chunks.extend(chunks)
+                    document_names.append(file.name)
 
                 progress.progress(
                     (i + 1) / len(uploaded_files)
                 )
 
-            st.session_state.chunks = (
-                all_chunks
-            )
+            st.session_state.chunks = all_chunks
+            st.session_state.documents = document_names
 
-            st.session_state.documents = (
-                names
-            )
+            # Build TF-IDF ONLY ONCE
+            success = build_tfidf_index()
 
-            st.session_state.document_summary = ""
+            if success:
 
-            st.session_state.suggested_questions = []
+                st.session_state.kb_ready = True
 
-            if all_chunks:
+                st.session_state.document_summary = ""
+                st.session_state.suggested_questions = []
 
                 st.success(
-                    f"Knowledge Base created! "
-                    f"{len(all_chunks)} chunks."
-                )
-
-            else:
-
-                st.error(
-                    "No readable text was found."
+                    f"✅ Knowledge Base ready!\n\n"
+                    f"Documents: {len(document_names)}\n\n"
+                    f"Chunks: {len(all_chunks)}"
                 )
 
     st.divider()
 
-    # ========================================================
-    # AI MODE
-    # ========================================================
+    st.subheader("🔌 System Status")
 
-    st.subheader("🎯 AI Mode")
+    if get_gemini_client():
 
-    mode = st.selectbox(
-        "Choose response mode",
-        [
-            "Normal",
-            "🎓 Student",
-            "🔬 Research"
-        ]
-    )
+        st.success("Gemini API: Connected")
 
-    st.divider()
+    else:
 
-    # ========================================================
-    # SYSTEM STATUS
-    # ========================================================
+        st.error("Gemini API: Not Connected")
 
-    st.subheader("📊 System Status")
-
-    st.write(
-        f"📄 Documents: "
-        f"**{len(st.session_state.documents)}**"
-    )
-
-    st.write(
-        f"🧩 Text Chunks: "
-        f"**{len(st.session_state.chunks)}**"
-    )
-
-    st.write(
-        "🤖 Models:"
-    )
-
-    for model_name in MODEL_NAMES:
-
-        st.caption(
-            f"• {model_name}"
-        )
-
-    if client:
+    if st.session_state.kb_ready:
 
         st.success(
-            "🟢 Gemini Connected"
+            f"Knowledge Base: {len(st.session_state.chunks)} chunks"
         )
 
     else:
 
-        st.error(
-            "🔴 Gemini Not Connected"
-        )
-
-    # ========================================================
-    # TEST GEMINI
-    # ========================================================
+        st.info("Knowledge Base: Empty")
 
     st.divider()
 
@@ -1172,31 +764,7 @@ with st.sidebar:
         use_container_width=True
     ):
 
-        with st.spinner(
-            "Testing Gemini models..."
-        ):
-
-            test_result = test_gemini()
-
-        if test_result.startswith(
-            "Gemini connection successful"
-        ):
-
-            st.success(
-                test_result
-            )
-
-        else:
-
-            st.error(
-                test_result
-            )
-
-    # ========================================================
-    # CLEAR CHAT
-    # ========================================================
-
-    st.divider()
+        test_gemini()
 
     if st.button(
         "🗑️ Clear Chat",
@@ -1208,322 +776,177 @@ with st.sidebar:
         st.rerun()
 
 
-# ============================================================
-# 20. HEADER
-# ============================================================
+# =========================================================
+# MAIN FEATURES
+# =========================================================
 
-st.markdown(
-    '<div class="main-title">'
-    '🧠 IntelliMind AI'
-    '</div>',
-    unsafe_allow_html=True
-)
-
-st.markdown(
-    '<div class="subtitle">'
-    'AI-Powered Research & Knowledge Assistant'
-    '</div>',
-    unsafe_allow_html=True
-)
-
-
-# ============================================================
-# 21. TOP FEATURES
-# ============================================================
-
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3 = st.columns(3)
 
 with col1:
 
-    st.metric(
-        "📄 Documents",
-        len(
-            st.session_state.documents
-        )
+    st.markdown(
+        """
+        <div class="card">
+        <h3>📚 Knowledge Base</h3>
+        <p>Ask questions from uploaded PDF/TXT files.</p>
+        </div>
+        """,
+        unsafe_allow_html=True
     )
 
 with col2:
 
-    st.metric(
-        "🧩 Chunks",
-        len(
-            st.session_state.chunks
-        )
+    st.markdown(
+        """
+        <div class="card">
+        <h3>⚡ Fast Retrieval</h3>
+        <p>TF-IDF index is created only once.</p>
+        </div>
+        """,
+        unsafe_allow_html=True
     )
 
 with col3:
 
-    st.metric(
-        "🤖 AI",
-        "Gemini"
-        if client
-        else "Offline"
-    )
-
-with col4:
-
-    st.metric(
-        "🔎 Retrieval",
-        "TF-IDF"
-    )
-
-
-# ============================================================
-# 22. DOCUMENT SECTION
-# ============================================================
-
-if st.session_state.documents:
-
     st.markdown(
-        "### 📚 Uploaded Documents"
+        """
+        <div class="card">
+        <h3>🤖 Gemini AI</h3>
+        <p>Gemini generates the final answer.</p>
+        </div>
+        """,
+        unsafe_allow_html=True
     )
 
-    for name in st.session_state.documents:
 
-        st.write(
-            f"📄 **{name}**"
-        )
+# =========================================================
+# DOCUMENT TOOLS
+# =========================================================
 
+if st.session_state.kb_ready:
 
-# ============================================================
-# 23. AI RESEARCH TOOLS
-# ============================================================
+    st.divider()
 
-if st.session_state.chunks:
-
-    st.markdown(
-        "### 🛠️ AI Research Tools"
-    )
+    st.subheader("🛠️ Document Tools")
 
     col1, col2 = st.columns(2)
-
-    # --------------------------------------------------------
-    # Summary
-    # --------------------------------------------------------
 
     with col1:
 
         if st.button(
-            "📝 Generate Document Summary",
+            "📝 Generate Summary",
             use_container_width=True
         ):
 
-            with st.spinner(
-                "Analyzing document..."
-            ):
+            with st.spinner("Generating summary..."):
 
                 summary = generate_summary()
 
-            st.session_state.document_summary = (
-                summary
-            )
-
-    # --------------------------------------------------------
-    # Questions
-    # --------------------------------------------------------
+            st.session_state.document_summary = summary
 
     with col2:
 
         if st.button(
-            "💡 Generate Questions",
+            "❓ Generate Questions",
             use_container_width=True
         ):
 
-            with st.spinner(
-                "Generating questions..."
-            ):
+            with st.spinner("Generating questions..."):
 
                 questions = generate_questions()
 
-            st.session_state.suggested_questions = (
-                questions
-            )
+            st.session_state.suggested_questions = questions
 
 
-# ============================================================
-# 24. SUMMARY
-# ============================================================
+# =========================================================
+# SHOW SUMMARY
+# =========================================================
 
 if st.session_state.document_summary:
 
-    with st.expander(
-        "📝 Document Summary",
-        expanded=True
-    ):
+    st.divider()
 
-        st.markdown(
-            st.session_state.document_summary
-        )
+    st.subheader("📝 Document Summary")
+
+    st.write(
+        st.session_state.document_summary
+    )
 
 
-# ============================================================
-# 25. SUGGESTED QUESTIONS
-# ============================================================
+# =========================================================
+# SHOW QUESTIONS
+# =========================================================
 
 if st.session_state.suggested_questions:
 
-    st.markdown(
-        "### 💡 Suggested Questions"
-    )
+    st.subheader("❓ Suggested Questions")
 
-    for question in (
-        st.session_state.suggested_questions
-    ):
+    for question in st.session_state.suggested_questions:
 
-        st.info(
-            question
-        )
+        st.markdown(f"- {question}")
 
 
-# ============================================================
-# 26. CHAT HISTORY
-# ============================================================
+# =========================================================
+# CHAT HISTORY
+# =========================================================
 
-for message in st.session_state.chat_history:
+st.divider()
 
-    with st.chat_message(
-        message["role"]
-    ):
-
-        st.markdown(
-            message["content"]
-        )
-
-        if message["role"] == "assistant":
-
-            if message.get("source"):
-
-                st.caption(
-                    f"Source: "
-                    f"{message['source']}"
-                )
-
-            if message.get("score") is not None:
-
-                st.caption(
-                    f"Retrieval score: "
-                    f"{message['score']:.2f}"
-                )
+st.subheader("💬 Chat")
 
 
-# ============================================================
-# 27. CHAT INPUT
-# ============================================================
-
-question = st.chat_input(
-    "Ask anything about your documents..."
-)
-
-
-# ============================================================
-# 28. HANDLE QUESTION
-# ============================================================
-
-if question:
-
-    # ========================================================
-    # USER MESSAGE
-    # ========================================================
-
-    st.session_state.chat_history.append(
-        {
-            "role": "user",
-            "content": question
-        }
-    )
+for item in st.session_state.chat_history:
 
     with st.chat_message("user"):
-
-        st.markdown(
-            question
-        )
-
-    # ========================================================
-    # AI MESSAGE
-    # ========================================================
+        st.write(item["question"])
 
     with st.chat_message("assistant"):
 
-        with st.spinner(
-            "🧠 Searching knowledge base and thinking..."
-        ):
+        st.write(item["answer"])
 
-            (
-                answer,
-                source,
-                score,
-                results
-            ) = generate_answer(
-                question,
-                mode
+        st.caption(
+            f"{item['source']} | "
+            f"Similarity: {item['score']:.2f}"
+        )
+
+
+# =========================================================
+# CHAT INPUT
+# =========================================================
+
+question = st.chat_input(
+    "Ask IntelliMind AI..."
+)
+
+
+if question:
+
+    question = question.strip()
+
+    if question:
+
+        with st.chat_message("user"):
+
+            st.write(question)
+
+        with st.chat_message("assistant"):
+
+            with st.spinner("Thinking..."):
+
+                answer, source, score = generate_answer(
+                    question,
+                    mode
+                )
+
+            st.write(answer)
+
+            st.caption(
+                f"{source} | Similarity: {score:.2f}"
             )
 
-        # ----------------------------------------------------
-        # Answer
-        # ----------------------------------------------------
-
-        st.markdown(
-            answer
-        )
-
-        # ----------------------------------------------------
-        # Source
-        # ----------------------------------------------------
-
-        st.caption(
-            f"Source: {source}"
-        )
-
-        # ----------------------------------------------------
-        # Retrieval score
-        # ----------------------------------------------------
-
-        st.caption(
-            f"Best retrieval score: "
-            f"{score:.2f}"
-        )
-
-        # ====================================================
-        # RETRIEVED SOURCES
-        # ====================================================
-
-        relevant = [
-            item
-            for item in results
-            if item["score"] >= MIN_SIMILARITY
-        ]
-
-        if relevant:
-
-            with st.expander(
-                "🔎 View Retrieved Sources"
-            ):
-
-                for item in relevant:
-
-                    st.markdown(
-                        f"""
-### 📄 {item['source']}
-
-**Chunk:** `{item['chunk_id']}`
-
-**Relevance:** `{item['score']:.2f}`
-
-{item['text']}
-
----
-"""
-                    )
-
-    # ========================================================
-    # SAVE CHAT
-    # ========================================================
-
-    st.session_state.chat_history.append(
-        {
-            "role": "assistant",
-            "content": answer,
+        st.session_state.chat_history.append({
+            "question": question,
+            "answer": answer,
             "source": source,
             "score": score
-        }
-    )
+        })
