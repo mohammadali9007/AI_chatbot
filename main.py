@@ -21,278 +21,134 @@ st.set_page_config(
 
 
 # =========================================================
-# CLEAN BLUE AI UI
+# CSS ONLY
+# NO HTML
 # =========================================================
 
 st.markdown(
     """
     <style>
 
-    /* ==============================
-       GLOBAL
-    ============================== */
-
-    @import url(
-        'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap'
-    );
-
-    html, body, [class*="css"] {
-        font-family: "Inter", sans-serif;
-    }
-
+    /* Main background */
     .stApp {
-        background:
-            linear-gradient(
-                135deg,
-                #f8fbff 0%,
-                #edf5ff 50%,
-                #f8fbff 100%
-            );
+        background-color: #f4f8ff;
     }
 
+    /* Main content width */
     .block-container {
         max-width: 1050px;
-        padding-top: 25px;
+        padding-top: 35px;
         padding-bottom: 120px;
     }
 
-
-    /* ==============================
-       SIDEBAR
-    ============================== */
-
+    /* Sidebar */
     section[data-testid="stSidebar"] {
-        background: linear-gradient(
-            180deg,
-            #071b3d 0%,
-            #092b63 55%,
-            #071c40 100%
-        );
-
-        border-right: 1px solid rgba(255,255,255,0.08);
+        background-color: #081d3d;
     }
 
-    section[data-testid="stSidebar"] p,
-    section[data-testid="stSidebar"] label,
-    section[data-testid="stSidebar"] span {
+    section[data-testid="stSidebar"] * {
         color: #dbeafe;
     }
 
-    .brand {
-        padding: 10px 0 20px 0;
-        border-bottom: 1px solid rgba(255,255,255,0.12);
-        margin-bottom: 20px;
-    }
-
-    .brand-name {
+    /* Sidebar buttons */
+    section[data-testid="stSidebar"] button {
+        background-color: #102e5c;
+        border: 1px solid #244d83;
         color: white;
-        font-size: 21px;
-        font-weight: 700;
-        margin-top: 5px;
     }
 
-    .brand-subtitle {
-        color: #8db7ee;
-        font-size: 11px;
-        margin-top: 3px;
+    section[data-testid="stSidebar"] button:hover {
+        border-color: #4f9cff;
+        background-color: #163a70;
     }
 
-    .section-title {
-        color: #72a8ed;
-        font-size: 10px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 1.2px;
-        margin-top: 20px;
-        margin-bottom: 10px;
-    }
-
-    .dataset-status {
-        background: rgba(37,99,235,0.18);
-        border: 1px solid rgba(147,197,253,0.20);
-        border-radius: 12px;
-        padding: 12px;
-        margin-top: 10px;
-    }
-
-    .dataset-status-title {
-        color: #bfdbfe;
-        font-size: 12px;
-        font-weight: 600;
-    }
-
-    .dataset-status-text {
-        color: #8db7ee;
-        font-size: 10px;
-        margin-top: 4px;
-    }
-
-
-    /* ==============================
-       TOP HEADER
-    ============================== */
-
-    .header-box {
-        text-align: center;
-        padding: 20px 10px 28px 10px;
-    }
-
-    .header-title {
-        color: #123c7a;
-        font-size: 34px;
-        font-weight: 700;
+    /* Main title */
+    h1 {
+        color: #123c7a !important;
+        font-weight: 700 !important;
         letter-spacing: -1px;
     }
 
-    .header-subtitle {
-        color: #64748b;
-        font-size: 13px;
-        margin-top: 6px;
+    h2, h3 {
+        color: #183e78 !important;
     }
 
-    .status {
-        display: inline-block;
-        margin-top: 12px;
-        padding: 5px 12px;
-        border-radius: 20px;
-        background: #eff6ff;
-        border: 1px solid #bfdbfe;
-        color: #2563eb;
-        font-size: 10px;
-        font-weight: 600;
+    /* Normal text */
+    p {
+        color: #475569;
     }
 
-
-    /* ==============================
-       WELCOME
-    ============================== */
-
-    .welcome-title {
-        text-align: center;
-        color: #183e78;
-        font-size: 21px;
-        font-weight: 600;
-        margin-top: 25px;
+    /* File uploader */
+    [data-testid="stFileUploader"] {
+        background-color: white;
+        border-radius: 14px;
+        padding: 8px;
+        border: 1px solid #d6e5fa;
     }
 
-    .welcome-text {
-        text-align: center;
-        color: #64748b;
-        font-size: 13px;
-        max-width: 650px;
-        margin: 8px auto 25px auto;
-        line-height: 1.6;
-    }
-
-
-    /* ==============================
-       PROMPT CARDS
-    ============================== */
-
-    .prompt-box {
-        background: rgba(255,255,255,0.85);
-        border: 1px solid #dbeafe;
-        border-radius: 15px;
-        padding: 17px;
-        min-height: 105px;
-        box-shadow: 0 5px 20px rgba(37,99,235,0.05);
-    }
-
-    .prompt-title {
-        color: #1d4ed8;
-        font-size: 12px;
-        font-weight: 600;
-        margin-bottom: 5px;
-    }
-
-    .prompt-text {
-        color: #64748b;
-        font-size: 11px;
-        line-height: 1.5;
-    }
-
-
-    /* ==============================
-       CHAT
-    ============================== */
-
-    [data-testid="stChatMessage"] {
-        background: transparent !important;
-        border: none !important;
-        padding-top: 7px;
-        padding-bottom: 7px;
-    }
-
-    [data-testid="stChatMessageContent"] {
-        font-size: 14px;
-        line-height: 1.7;
-    }
-
-
-    /* ==============================
-       CHAT INPUT
-    ============================== */
-
+    /* Chat input */
     [data-testid="stChatInput"] {
-        border-radius: 18px !important;
-        border: 1px solid #bfdbfe !important;
-        background: white !important;
-
-        box-shadow:
-            0 8px 30px rgba(37,99,235,0.12);
+        border: 1px solid #b8d4f7;
+        border-radius: 16px;
+        background-color: white;
+        box-shadow: 0 5px 20px rgba(30, 100, 200, 0.10);
     }
 
-
-    /* ==============================
-       BUTTONS
-    ============================== */
-
-    .stButton > button {
-        border-radius: 10px !important;
-        border: 1px solid #bfdbfe !important;
-        background: white !important;
-        color: #1d4ed8 !important;
-        font-size: 12px !important;
+    /* Chat messages */
+    [data-testid="stChatMessage"] {
+        border-radius: 14px;
     }
 
-    .stButton > button:hover {
-        border-color: #2563eb !important;
-        background: #eff6ff !important;
+    /* Buttons */
+    .stButton button {
+        border-radius: 10px;
+        border: 1px solid #b8d4f7;
+        background-color: white;
+        color: #1757a6;
+        font-weight: 500;
     }
 
+    .stButton button:hover {
+        border-color: #2878d8;
+        background-color: #edf5ff;
+        color: #0d4f9e;
+    }
 
-    /* ==============================
-       EXPANDER
-    ============================== */
-
+    /* Expander */
     [data-testid="stExpander"] {
-        border: 1px solid #dbeafe !important;
-        border-radius: 12px !important;
-        background: #f8fbff !important;
+        border: 1px solid #d6e5fa;
+        border-radius: 12px;
+        background-color: white;
     }
 
+    /* Metrics */
+    [data-testid="stMetric"] {
+        background-color: white;
+        border: 1px solid #d6e5fa;
+        padding: 12px;
+        border-radius: 12px;
+    }
 
-    /* ==============================
-       MOBILE
-    ============================== */
+    /* Divider */
+    hr {
+        border-color: #dce9f8;
+    }
 
+    /* Mobile */
     @media (max-width: 768px) {
 
         .block-container {
-            padding-left: 14px;
-            padding-right: 14px;
+            padding-left: 15px;
+            padding-right: 15px;
+            padding-top: 20px;
         }
 
-        .header-title {
-            font-size: 27px;
+        h1 {
+            font-size: 28px !important;
         }
 
-        .header-subtitle {
-            font-size: 12px;
-        }
-
-        .prompt-box {
-            margin-bottom: 10px;
+        [data-testid="stMetric"] {
+            margin-bottom: 8px;
         }
     }
 
@@ -375,45 +231,44 @@ def expand_short_forms(text):
 
     words = text.split()
 
-    result = []
+    expanded = []
 
     for word in words:
 
-        result.append(word)
+        expanded.append(word)
 
         if word in SHORT_FORMS:
-
-            result.append(
+            expanded.append(
                 SHORT_FORMS[word]
             )
 
-    return " ".join(result)
+    return " ".join(expanded)
 
 
 # =========================================================
-# LOAD EMBEDDING MODEL
+# LOAD MODEL
 # =========================================================
 
 @st.cache_resource
-def load_embedding_model():
+def load_model():
 
     return SentenceTransformer(
         "all-MiniLM-L6-v2"
     )
 
 
-model = load_embedding_model()
+model = load_model()
 
 
 # =========================================================
-# PARSE DATASET
+# DATASET PARSER
 # =========================================================
 
 def parse_dataset(uploaded_file):
 
-    raw_data = uploaded_file.read()
+    raw = uploaded_file.read()
 
-    text = raw_data.decode(
+    text = raw.decode(
         "utf-8",
         errors="ignore"
     )
@@ -448,36 +303,36 @@ def parse_dataset(uploaded_file):
 
 
 # =========================================================
-# CREATE EMBEDDINGS
+# EMBEDDINGS
 # =========================================================
 
 @st.cache_data(show_spinner=False)
 def create_embeddings(question_tuple):
 
-    processed_questions = [
-        expand_short_forms(question)
-        for question in question_tuple
+    processed = [
+        expand_short_forms(q)
+        for q in question_tuple
     ]
 
     embeddings = model.encode(
-        processed_questions,
+        processed,
         normalize_embeddings=True,
         show_progress_bar=False
     )
 
-    return np.array(embeddings)
+    return np.asarray(embeddings)
 
 
 # =========================================================
-# CREATE TF-IDF
+# TF-IDF
 # =========================================================
 
 @st.cache_data(show_spinner=False)
 def create_tfidf(question_tuple):
 
-    processed_questions = [
-        expand_short_forms(question)
-        for question in question_tuple
+    processed = [
+        expand_short_forms(q)
+        for q in question_tuple
     ]
 
     vectorizer = TfidfVectorizer(
@@ -486,18 +341,18 @@ def create_tfidf(question_tuple):
     )
 
     matrix = vectorizer.fit_transform(
-        processed_questions
+        processed
     )
 
     return vectorizer, matrix
 
 
 # =========================================================
-# SEARCH DATASET
+# SEARCH
 # =========================================================
 
 def search_dataset(
-    user_question,
+    question,
     top_k=5
 ):
 
@@ -505,10 +360,9 @@ def search_dataset(
         return []
 
     query = expand_short_forms(
-        user_question
+        question
     )
 
-    # Semantic similarity
     query_embedding = model.encode(
         [query],
         normalize_embeddings=True
@@ -519,7 +373,6 @@ def search_dataset(
         st.session_state.embeddings
     )[0]
 
-    # TF-IDF similarity
     query_tfidf = (
         st.session_state.tfidf_vectorizer
         .transform([query])
@@ -530,7 +383,6 @@ def search_dataset(
         st.session_state.tfidf_matrix
     )[0]
 
-    # Hybrid score
     final_scores = (
         semantic_scores * 0.75
         +
@@ -545,16 +397,18 @@ def search_dataset(
 
     for index in indices:
 
-        results.append({
-            "question":
-                st.session_state.questions[index],
+        results.append(
+            {
+                "question":
+                    st.session_state.questions[index],
 
-            "answer":
-                st.session_state.answers[index],
+                "answer":
+                    st.session_state.answers[index],
 
-            "score":
-                float(final_scores[index])
-        })
+                "score":
+                    float(final_scores[index])
+            }
+        )
 
     return results
 
@@ -577,6 +431,7 @@ def get_gemini_client():
         api_key = ""
 
     if not api_key:
+
         return None
 
     return genai.Client(
@@ -585,7 +440,7 @@ def get_gemini_client():
 
 
 # =========================================================
-# GEMINI ANSWER
+# GEMINI
 # =========================================================
 
 def generate_ai_answer(
@@ -599,87 +454,76 @@ def generate_ai_answer(
 
         return (
             "Gemini API key is not configured. "
-            "Please add GEMINI_API_KEY to "
+            "Please add GEMINI_API_KEY in "
             "Streamlit Secrets."
         )
 
-    context = ""
+    knowledge = ""
 
-    for i, item in enumerate(
-        matches[:4],
-        start=1
-    ):
+    for item in matches[:4]:
 
-        context += f"""
-
-Knowledge {i}
-
-Question:
-{item["question"]}
-
-Answer:
-{item["answer"]}
-
-"""
+        knowledge += (
+            "\nQuestion: "
+            + item["question"]
+            + "\nAnswer: "
+            + item["answer"]
+            + "\n"
+        )
 
     prompt = f"""
-You are IntelliMind AI, a professional
-educational AI assistant.
+You are IntelliMind AI.
 
-User Question:
+You are an intelligent educational assistant.
+
+User question:
 {question}
 
-Relevant Knowledge:
-{context}
+Relevant knowledge:
+{knowledge}
 
-Instructions:
+Important rules:
 
-1. Understand natural language questions.
+- Understand short forms such as AI, ML, DL,
+  NLP, CV, LLM, RAG, CNN, RNN and BERT.
 
-2. Understand technical short forms:
+- If the user asks "ML ki?",
+  understand it as:
+  "What is Machine Learning?"
 
-AI = Artificial Intelligence
-ML = Machine Learning
-DL = Deep Learning
-NLP = Natural Language Processing
-CV = Computer Vision
-LLM = Large Language Model
-RAG = Retrieval Augmented Generation
-CNN = Convolutional Neural Network
-RNN = Recurrent Neural Network
+- If the user asks "DL ki?",
+  understand it as:
+  "What is Deep Learning?"
 
-3. If the user asks "ML ki?",
-understand it as "What is Machine Learning?"
+- If the user asks "CV ki?",
+  understand it as:
+  "What is Computer Vision?"
 
-4. If the user asks "DL vs ML",
-understand it as "Deep Learning vs Machine Learning."
+- If the user asks "NLP ki?",
+  understand it as:
+  "What is Natural Language Processing?"
 
-5. Use the provided knowledge when relevant.
+- Use the provided knowledge when it is relevant.
 
-6. If the knowledge is not enough,
-use your general knowledge.
+- If the provided knowledge is insufficient,
+  answer using your general knowledge.
 
-7. Give a direct answer.
+- Give clear and accurate answers.
 
-8. Keep explanations easy to understand.
+- Use simple English.
 
-9. For comparisons, use a small table.
+- If the user asks in Bangla,
+  answer in simple Bangla.
 
-10. Give examples for technical concepts
-when useful.
+- Do not mention the dataset,
+  similarity score,
+  embeddings,
+  TF-IDF,
+  retrieval or internal system.
 
-11. Do not mention:
-- dataset retrieval
-- similarity score
-- embeddings
-- TF-IDF
-- internal system
-- prompt
+- For comparison questions,
+  use a simple table when useful.
 
-12. If the user writes in Bangla,
-you can answer in simple Bangla.
-
-Now answer the user.
+Answer directly.
 """
 
     try:
@@ -702,8 +546,8 @@ Now answer the user.
         if "503" in error:
 
             return (
-                "AI service is temporarily busy. "
-                "Please try again in a few seconds."
+                "The AI service is temporarily busy. "
+                "Please try again after a few seconds."
             )
 
         return (
@@ -713,7 +557,7 @@ Now answer the user.
 
 
 # =========================================================
-# ANSWER ENGINE
+# ANSWER FUNCTION
 # =========================================================
 
 def get_answer(question):
@@ -726,25 +570,25 @@ def get_answer(question):
     if not matches:
 
         return (
-            "I couldn't find a relevant answer.",
+            "I could not find a relevant answer.",
             [],
-            0
+            0.0
         )
 
-    best_match = matches[0]
+    best = matches[0]
 
-    score = best_match["score"]
+    score = best["score"]
 
-    # High confidence
+    # Very strong dataset match
     if score >= 0.68:
 
         return (
-            best_match["answer"],
+            best["answer"],
             matches,
             score
         )
 
-    # AI explanation / fallback
+    # Otherwise use Gemini
     answer = generate_ai_answer(
         question,
         matches
@@ -763,32 +607,24 @@ def get_answer(question):
 
 with st.sidebar:
 
-    # Brand
-    st.markdown(
-        '<div class="brand">'
-        '<div class="brand-name">IntelliMind AI</div>'
-        '<div class="brand-subtitle">'
-        'Smart Knowledge Assistant'
-        '</div>'
-        '</div>',
-        unsafe_allow_html=True
+    st.title("IntelliMind AI")
+
+    st.caption(
+        "Smart Knowledge Assistant"
     )
 
-    # Knowledge base
-    st.markdown(
-        '<div class="section-title">'
-        'Knowledge Base'
-        '</div>',
-        unsafe_allow_html=True
+    st.divider()
+
+    st.subheader(
+        "Knowledge Base"
     )
 
     uploaded_file = st.file_uploader(
-        "Upload TXT Dataset",
-        type=["txt"],
-        help="Format: Question | Answer"
+        "Upload your TXT dataset",
+        type=["txt"]
     )
 
-    if uploaded_file is not None:
+    if uploaded_file:
 
         try:
 
@@ -796,7 +632,13 @@ with st.sidebar:
                 uploaded_file
             )
 
-            if questions:
+            if len(questions) == 0:
+
+                st.error(
+                    "No valid data found."
+                )
+
+            else:
 
                 dataset_key = (
                     uploaded_file.name,
@@ -809,19 +651,20 @@ with st.sidebar:
                 ):
 
                     with st.spinner(
-                        "Processing knowledge base..."
+                        "Loading knowledge base..."
                     ):
 
-                        embeddings = (
+                        st.session_state.embeddings = (
                             create_embeddings(
                                 tuple(questions)
                             )
                         )
 
-                        vectorizer, matrix = (
-                            create_tfidf(
-                                tuple(questions)
-                            )
+                        (
+                            st.session_state.tfidf_vectorizer,
+                            st.session_state.tfidf_matrix
+                        ) = create_tfidf(
+                            tuple(questions)
                         )
 
                     st.session_state.questions = (
@@ -832,47 +675,14 @@ with st.sidebar:
                         answers
                     )
 
-                    st.session_state.embeddings = (
-                        embeddings
-                    )
-
-                    st.session_state.tfidf_vectorizer = (
-                        vectorizer
-                    )
-
-                    st.session_state.tfidf_matrix = (
-                        matrix
-                    )
-
                     st.session_state.dataset_key = (
                         dataset_key
                     )
 
                     st.session_state.messages = []
 
-                st.markdown(
-                    f"""
-                    <div class="dataset-status">
-
-                        <div class="dataset-status-title">
-                            Knowledge Base Ready
-                        </div>
-
-                        <div class="dataset-status-text">
-                            {len(questions)}
-                            Q&A entries loaded
-                        </div>
-
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-
-            else:
-
-                st.error(
-                    "No valid Question | Answer "
-                    "entries found."
+                st.success(
+                    f"{len(questions)} Q&A entries loaded"
                 )
 
         except Exception as e:
@@ -883,38 +693,20 @@ with st.sidebar:
 
     else:
 
-        st.markdown(
-            """
-            <div class="dataset-status">
-
-                <div class="dataset-status-title">
-                    No Dataset
-                </div>
-
-                <div class="dataset-status-text">
-                    Upload your Question | Answer
-                    TXT file.
-                </div>
-
-            </div>
-            """,
-            unsafe_allow_html=True
+        st.info(
+            "Upload your Question | Answer TXT file."
         )
 
-    # Options
-    st.markdown(
-        '<div class="section-title">'
-        'Options'
-        '</div>',
-        unsafe_allow_html=True
+    st.divider()
+
+    st.subheader(
+        "Settings"
     )
 
     show_matches = st.checkbox(
         "Show knowledge matches",
         value=False
     )
-
-    st.write("")
 
     if st.button(
         "New Conversation",
@@ -925,139 +717,111 @@ with st.sidebar:
 
         st.rerun()
 
-    st.markdown(
-        """
-        <div style="
-            margin-top:25px;
-            padding-top:15px;
-            border-top:1px solid rgba(255,255,255,0.10);
-            color:#719bd0;
-            font-size:10px;
-            line-height:1.7;
-        ">
-            IntelliMind AI<br>
-            NLP • Semantic Search • Gemini
-        </div>
-        """,
-        unsafe_allow_html=True
+    st.divider()
+
+    st.caption(
+        "NLP + Semantic Search + Gemini"
     )
 
 
 # =========================================================
-# HEADER
+# MAIN HEADER
+# =========================================================
+
+st.title(
+    "IntelliMind AI"
+)
+
+st.caption(
+    "Intelligent answers from your knowledge base "
+    "with Generative AI support."
+)
+
+# Status
+if st.session_state.questions:
+
+    st.success(
+        "AI system ready"
+    )
+
+else:
+
+    st.warning(
+        "Upload your TXT knowledge base to start."
+    )
+
+
+# =========================================================
+# WELCOME
 # =========================================================
 
 if not st.session_state.messages:
 
-    st.markdown(
-        """
-        <div class="header-box">
+    st.divider()
 
-            <div class="header-title">
-                IntelliMind AI
-            </div>
-
-            <div class="header-subtitle">
-                Intelligent answers powered by
-                NLP, semantic search and Generative AI
-            </div>
-
-            <div class="status">
-                AI SYSTEM ONLINE
-            </div>
-
-        </div>
-        """,
-        unsafe_allow_html=True
+    st.subheader(
+        "What can I help you with?"
     )
 
-
-# =========================================================
-# WELCOME SCREEN
-# =========================================================
-
-if not st.session_state.messages:
-
-    st.markdown(
-        """
-        <div class="welcome-title">
-            What can I help you with?
-        </div>
-
-        <div class="welcome-text">
-            Ask your question naturally.
-            IntelliMind can understand technical
-            terms and short forms such as ML, DL,
-            CV, NLP, AI and LLM.
-        </div>
-        """,
-        unsafe_allow_html=True
+    st.write(
+        "Ask questions naturally. "
+        "The system understands common AI and "
+        "technology abbreviations."
     )
+
+    st.write("")
 
     col1, col2, col3 = st.columns(3)
 
     with col1:
 
-        st.markdown(
-            """
-            <div class="prompt-box">
-
-                <div class="prompt-title">
-                    Machine Learning
-                </div>
-
-                <div class="prompt-text">
-                    What is ML?
-                    <br>
-                    Explain machine learning.
-                </div>
-
-            </div>
-            """,
-            unsafe_allow_html=True
+        st.info(
+            "**Machine Learning**\n\n"
+            "What is ML?\n\n"
+            "Explain machine learning."
         )
 
     with col2:
 
-        st.markdown(
-            """
-            <div class="prompt-box">
-
-                <div class="prompt-title">
-                    Computer Vision
-                </div>
-
-                <div class="prompt-text">
-                    What is CV?
-                    <br>
-                    Give some CV applications.
-                </div>
-
-            </div>
-            """,
-            unsafe_allow_html=True
+        st.info(
+            "**Deep Learning**\n\n"
+            "What is DL?\n\n"
+            "DL vs ML."
         )
 
     with col3:
 
-        st.markdown(
-            """
-            <div class="prompt-box">
-
-                <div class="prompt-title">
-                    Deep Learning
-                </div>
-
-                <div class="prompt-text">
-                    What is DL?
-                    <br>
-                    DL vs ML.
-                </div>
-
-            </div>
-            """,
-            unsafe_allow_html=True
+        st.info(
+            "**Natural Language Processing**\n\n"
+            "What is NLP?\n\n"
+            "What are NLP applications?"
         )
+
+    st.write("")
+
+    if st.session_state.questions:
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.metric(
+                "Knowledge Entries",
+                len(
+                    st.session_state.questions
+                )
+            )
+
+        with col2:
+            st.metric(
+                "Search",
+                "Semantic + TF-IDF"
+            )
+
+        with col3:
+            st.metric(
+                "AI",
+                "Gemini"
+            )
 
 
 # =========================================================
@@ -1068,12 +832,7 @@ for message in st.session_state.messages:
 
     role = message["role"]
 
-    avatar = "AI" if role == "assistant" else "You"
-
-    with st.chat_message(
-        role,
-        avatar=avatar
-    ):
+    with st.chat_message(role):
 
         st.markdown(
             message["content"]
@@ -1094,14 +853,20 @@ for message in st.session_state.messages:
                     start=1
                 ):
 
-                    st.markdown(
-                        f"""
-                        **{i}. {item["question"]}**
-
-                        Similarity:
-                        `{item["score"]:.3f}`
-                        """
+                    st.write(
+                        f"{i}. {item['question']}"
                     )
+
+                    st.caption(
+                        f"Similarity: "
+                        f"{item['score']:.3f}"
+                    )
+
+                    st.write(
+                        item["answer"]
+                    )
+
+                    st.divider()
 
 
 # =========================================================
@@ -1109,13 +874,12 @@ for message in st.session_state.messages:
 # =========================================================
 
 user_question = st.chat_input(
-    "Message IntelliMind AI..."
+    "Ask IntelliMind AI..."
 )
 
 
 if user_question:
 
-    # Dataset check
     if not st.session_state.questions:
 
         st.warning(
@@ -1124,7 +888,7 @@ if user_question:
 
         st.stop()
 
-    # User message
+    # User
     st.session_state.messages.append(
         {
             "role": "user",
@@ -1132,20 +896,14 @@ if user_question:
         }
     )
 
-    with st.chat_message(
-        "user",
-        avatar="You"
-    ):
+    with st.chat_message("user"):
 
         st.markdown(
             user_question
         )
 
-    # AI response
-    with st.chat_message(
-        "assistant",
-        avatar="AI"
-    ):
+    # AI
+    with st.chat_message("assistant"):
 
         with st.spinner(
             "Thinking..."
@@ -1175,18 +933,16 @@ if user_question:
                     start=1
                 ):
 
-                    st.markdown(
-                        f"""
-                        **{i}. {item["question"]}**
-
-                        Similarity:
-                        `{item["score"]:.3f}`
-
-                        {item["answer"]}
-                        """
+                    st.write(
+                        f"{i}. {item['question']}"
                     )
 
-    # Save response
+                    st.caption(
+                        f"Similarity: "
+                        f"{item['score']:.3f}"
+                    )
+
+    # Save
     st.session_state.messages.append(
         {
             "role": "assistant",
