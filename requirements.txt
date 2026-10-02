@@ -1,7 +1,4 @@
 streamlit
-requests
-numpy
 pypdf
 scikit-learn
-sentence-transformers
 google-genai
