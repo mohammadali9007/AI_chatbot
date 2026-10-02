@@ -816,29 +816,90 @@ if question:
     intent, confidence = predict_intent(
         processed_question
     )
+    # =========================
+    # RAG DOCUMENT SEARCH
+    # =========================
 
-    # RAG
-document_results = search_documents(
-    question,
-    top_k=5,
-    threshold=0.35
-)
+    document_results = search_documents(
+        question,
+        top_k=5,
+        threshold=0.35
+    )
+
     context_parts = []
 
     source_list = []
 
+    # Add uploaded document results
     for result in document_results:
 
         context_parts.append(
-            result["text"]
+            f"""
+SOURCE: {result['source']}
+
+CONTENT:
+{result['text']}
+"""
         )
 
         source_list.append(
             f"📄 {result['source']} "
-            f"• Similarity: "
-            f"{result['score']:.2f}"
+            f"• Similarity: {result['score']:.2f}"
         )
 
+
+    # =========================
+    # EXTERNAL KNOWLEDGE
+    # =========================
+
+    web_results = []
+
+    if external_search:
+
+        if not document_results:
+
+            web_results = wikipedia_search(
+                question
+            )
+
+        elif document_results[0]["score"] < 0.50:
+
+            web_results = wikipedia_search(
+                question
+            )
+
+
+    # Add Wikipedia results
+    for result in web_results:
+
+        context_parts.append(
+            f"""
+SOURCE: Wikipedia - {result['title']}
+
+CONTENT:
+{result['text']}
+"""
+        )
+
+        source_list.append(
+            f"🌐 {result['title']}"
+        )
+
+
+    # =========================
+    # FINAL CONTEXT
+    # =========================
+
+    context = "\n\n".join(
+        context_parts
+    )
+
+    if not context.strip():
+
+        context = (
+            "No matching document or "
+            "external knowledge was found."
+        )
 # =========================
 # EXTERNAL KNOWLEDGE
 # =========================
